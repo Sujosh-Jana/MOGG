@@ -1,0 +1,592 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>RANKED Admin</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500;600;700;800&display=swap" rel="stylesheet">
+<script src="https://www.gstatic.com/firebasejs/10.12.2/firebase-app-compat.js"></script>
+<script src="https://www.gstatic.com/firebasejs/10.12.2/firebase-auth-compat.js"></script>
+<script src="/ranked-config.js"></script>
+<style>
+:root {
+  --bg: #09090a;
+  --panel: #131317;
+  --panel-2: #19191f;
+  --panel-3: #22222a;
+  --line: #2e2e37;
+  --text: #f1f1ef;
+  --muted: #9898a2;
+  --faint: #666671;
+  --gold: #f0b429;
+  --green: #34d399;
+  --red: #f43f5e;
+  --blue: #7dd3fc;
+  --radius: 8px;
+}
+* { box-sizing: border-box; margin: 0; padding: 0; }
+html, body { min-height: 100%; background: var(--bg); color: var(--text); }
+body { font-family: "JetBrains Mono", Consolas, monospace; -webkit-font-smoothing: antialiased; }
+a { color: inherit; text-decoration: none; }
+button, input, select { font: inherit; }
+button { cursor: pointer; }
+
+.shell { min-height: 100vh; display: grid; grid-template-columns: 248px minmax(0, 1fr); }
+.sidebar {
+  position: sticky;
+  top: 0;
+  height: 100vh;
+  padding: 18px;
+  border-right: 1px solid var(--line);
+  background: var(--panel);
+}
+.brand { display: flex; align-items: center; gap: 9px; margin-bottom: 26px; font-size: 17px; font-weight: 800; }
+.dot { width: 9px; height: 9px; border-radius: 99px; background: var(--green); box-shadow: 0 0 12px rgba(52, 211, 153, .8); }
+.nav { display: grid; gap: 7px; }
+.nav button, .nav a {
+  min-height: 38px;
+  display: flex;
+  align-items: center;
+  border: 1px solid transparent;
+  border-radius: var(--radius);
+  background: transparent;
+  color: var(--muted);
+  padding: 9px 11px;
+  font-size: 12px;
+  text-align: left;
+}
+.nav button:hover, .nav a:hover { background: var(--panel-2); color: var(--text); }
+.nav button.active { border-color: var(--gold); background: rgba(240, 180, 41, .1); color: var(--gold); }
+.side-foot { position: absolute; left: 18px; right: 18px; bottom: 18px; color: var(--faint); font-size: 11px; line-height: 1.65; }
+.main { min-width: 0; padding: 26px; }
+.topline { display: flex; justify-content: space-between; align-items: flex-start; gap: 18px; margin-bottom: 22px; }
+.eyebrow { color: var(--gold); font-size: 11px; font-weight: 800; text-transform: uppercase; margin-bottom: 7px; }
+h1 { font-size: 28px; line-height: 1.15; letter-spacing: 0; }
+.sub { color: var(--muted); font-size: 12px; line-height: 1.7; margin-top: 8px; }
+.toolbar { display: flex; gap: 9px; flex-wrap: wrap; }
+.btn {
+  min-height: 36px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border: 1px solid transparent;
+  border-radius: 7px;
+  background: var(--gold);
+  color: #070707;
+  padding: 8px 13px;
+  font-size: 12px;
+  font-weight: 800;
+}
+.btn.secondary { border-color: var(--line); background: var(--panel-2); color: var(--text); }
+.btn.danger { background: var(--red); color: #fff; }
+.btn:disabled { opacity: .5; cursor: not-allowed; }
+.grid { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 12px; margin-bottom: 18px; }
+.metric { border: 1px solid var(--line); border-radius: var(--radius); background: var(--panel-2); padding: 16px; }
+.metric .label { color: var(--faint); font-size: 11px; font-weight: 800; text-transform: uppercase; }
+.metric .value { margin-top: 9px; font-size: 26px; font-weight: 800; }
+.split { display: grid; grid-template-columns: minmax(0, 1.1fr) minmax(0, .9fr); gap: 14px; }
+.card { border: 1px solid var(--line); border-radius: var(--radius); background: var(--panel-2); padding: 16px; margin-bottom: 14px; }
+.card h2 { font-size: 15px; margin-bottom: 12px; }
+.form-grid { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 12px; }
+.field { margin-bottom: 12px; }
+.field label { display: block; margin-bottom: 6px; color: var(--muted); font-size: 11px; font-weight: 700; }
+.field input, .field select {
+  width: 100%;
+  min-height: 40px;
+  border: 1px solid var(--line);
+  border-radius: 7px;
+  outline: 0;
+  background: var(--bg);
+  color: var(--text);
+  padding: 9px 10px;
+  font-size: 12px;
+}
+.field input:focus, .field select:focus { border-color: var(--gold); }
+.drop {
+  min-height: 88px;
+  width: 100%;
+  display: grid;
+  place-items: center;
+  border: 1px dashed #464652;
+  border-radius: var(--radius);
+  background: var(--bg);
+  color: var(--faint);
+  font-size: 12px;
+}
+.drop img { width: 68px; height: 68px; border-radius: 7px; object-fit: cover; }
+.table-wrap { overflow-x: auto; border: 1px solid var(--line); border-radius: var(--radius); }
+table { width: 100%; min-width: 760px; border-collapse: collapse; background: var(--panel-2); font-size: 12px; }
+th, td { padding: 10px; border-bottom: 1px solid #25252d; text-align: left; vertical-align: middle; }
+th { color: var(--faint); font-size: 11px; font-weight: 800; text-transform: uppercase; }
+tr:last-child td { border-bottom: 0; }
+.badge { display: inline-flex; min-height: 20px; align-items: center; border-radius: 99px; padding: 2px 8px; background: rgba(240, 180, 41, .13); color: var(--gold); font-size: 10px; font-weight: 800; }
+.badge.confirmed, .badge.approved { background: rgba(52, 211, 153, .13); color: var(--green); }
+.badge.flagged, .badge.removed_by_admin, .badge.opted_out { background: rgba(244, 63, 94, .13); color: var(--red); }
+.msg { margin-bottom: 12px; padding: 10px 12px; border-radius: 7px; font-size: 12px; line-height: 1.55; }
+.msg.ok { border: 1px solid var(--green); background: rgba(52, 211, 153, .1); color: #a7f3d0; }
+.msg.err { border: 1px solid var(--red); background: rgba(244, 63, 94, .1); color: #fecdd3; }
+.notice { border: 1px solid rgba(125, 211, 252, .28); background: rgba(125, 211, 252, .06); color: #b8eaff; }
+.empty { border: 1px solid var(--line); border-radius: var(--radius); background: var(--panel-2); color: var(--faint); padding: 22px; text-align: center; font-size: 12px; }
+.auth { min-height: 100vh; display: grid; place-items: center; padding: 20px; }
+.auth-box { width: 100%; max-width: 380px; }
+.link { color: var(--blue); text-decoration: underline; }
+.loading { width: 18px; height: 18px; margin: 40px auto; border: 2px solid var(--line); border-top-color: var(--gold); border-radius: 99px; animation: spin .7s linear infinite; }
+@keyframes spin { to { transform: rotate(360deg); } }
+
+@media (max-width: 900px) {
+  .shell { grid-template-columns: 1fr; }
+  .sidebar { position: static; height: auto; }
+  .side-foot { position: static; margin-top: 20px; }
+  .main { padding: 18px 14px 50px; }
+  .grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .split, .form-grid { grid-template-columns: 1fr; }
+  .topline { flex-direction: column; }
+}
+</style>
+</head>
+<body>
+<div id="root"><div class="loading"></div></div>
+
+<script>
+const firebaseConfig = window.RANKED_FIREBASE_CONFIG || {
+  apiKey: "YOUR_API_KEY",
+  authDomain: "YOUR_PROJECT.firebaseapp.com",
+  projectId: "YOUR_PROJECT_ID",
+  storageBucket: "YOUR_PROJECT.appspot.com",
+  messagingSenderId: "YOUR_SENDER_ID",
+  appId: "YOUR_APP_ID"
+};
+const useFirebase = firebaseConfig.apiKey !== "YOUR_API_KEY" && !!window.firebase;
+const DEMO_KEY = "ranked-demo-v1";
+let auth = null;
+let currentUser = null;
+let currentAdmin = null;
+let activeTab = "overview";
+let adminPhotoFile = null;
+
+if (useFirebase) {
+  firebase.initializeApp(firebaseConfig);
+  auth = firebase.auth();
+}
+
+function avatarData(text, color) {
+  const svg = `<svg xmlns="http://www.w3.org/2000/svg" width="160" height="160"><rect width="160" height="160" fill="${color}"/><text x="80" y="94" font-family="monospace" font-size="42" font-weight="800" text-anchor="middle" fill="#f1f1ef">${text}</text></svg>`;
+  return `data:image/svg+xml,${encodeURIComponent(svg)}`;
+}
+function uid() { return Math.random().toString(36).slice(2) + Date.now().toString(36); }
+function esc(value) { return String(value || "").replace(/[&<>"']/g, char => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[char])); }
+function initials(name) { return (name || "?").split(/\s+/).filter(Boolean).map(part => part[0]).slice(0, 2).join("").toUpperCase() || "?"; }
+function demoState() {
+  const saved = localStorage.getItem(DEMO_KEY);
+  if (saved) return JSON.parse(saved);
+  const now = Date.now();
+  const seed = {
+    sessionUid: "admin-demo",
+    users: [{ id: "admin-demo", email: "admin@ranked.local", password: "admin123", isAdmin: true, createdAt: now }],
+    institutions: [
+      { id: "harvard", name: "Harvard University", type: "college", status: "approved", candidateCount: 2, createdAt: now - 300000 },
+      { id: "google", name: "Google", type: "company", status: "approved", candidateCount: 1, createdAt: now - 250000 }
+    ],
+    nominations: [
+      { id: "nom-1", candidateName: "Jordan Lee", institutionId: "harvard", institutionName: "Harvard University", gender: "chad", status: "pending", confirmToken: "demo-pending-jordan", createdAt: now - 120000 },
+      { id: "nom-2", candidateName: "Priya Shah", institutionId: "google", institutionName: "Google", gender: "stacy", status: "flagged", confirmToken: "demo-flag-priya", createdAt: now - 90000 }
+    ],
+    candidates: [
+      { id: "c1", name: "Alex Rivera", photoURL: avatarData("AR", "#14213d"), gender: "chad", institutionId: "harvard", institutionName: "Harvard University", status: "confirmed", upvotes: 42, downvotes: 4, score: 42, createdAt: now - 200000 },
+      { id: "c2", name: "Maya Chen", photoURL: avatarData("MC", "#2f1b45"), gender: "stacy", institutionId: "harvard", institutionName: "Harvard University", status: "confirmed", upvotes: 38, downvotes: 3, score: 38, createdAt: now - 190000 },
+      { id: "c3", name: "Ethan Cole", photoURL: avatarData("EC", "#3b1d24"), gender: "chad", institutionId: "google", institutionName: "Google", status: "confirmed", upvotes: 19, downvotes: 4, score: 19, createdAt: now - 180000 }
+    ],
+    votes: [],
+    audit: []
+  };
+  localStorage.setItem(DEMO_KEY, JSON.stringify(seed));
+  return seed;
+}
+let demo = demoState();
+function saveDemo() { localStorage.setItem(DEMO_KEY, JSON.stringify(demo)); }
+function audit(type, meta = {}) {
+  demo.audit = demo.audit || [];
+  demo.audit.unshift({ id: uid(), type, actorEmail: currentUser?.email || "admin@ranked.local", meta, at: new Date().toISOString() });
+  demo.audit = demo.audit.slice(0, 80);
+  saveDemo();
+}
+
+async function apiJson(path, options = {}) {
+  const headers = { ...(options.headers || {}) };
+  let body = options.body;
+  if (body && typeof body !== "string") {
+    headers["Content-Type"] = "application/json";
+    body = JSON.stringify(body);
+  }
+  if (useFirebase && auth.currentUser) headers.Authorization = `Bearer ${await auth.currentUser.getIdToken()}`;
+  const response = await fetch(`/api/ranked${path}`, { ...options, headers, body });
+  const data = await response.json().catch(() => ({}));
+  if (!response.ok) throw new Error(data.error || "Request failed.");
+  return data;
+}
+
+async function fileToDataUrl(file) {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onload = event => resolve(event.target.result);
+    reader.onerror = reject;
+    reader.readAsDataURL(file);
+  });
+}
+async function compressImage(file, maxDim = 240, quality = 0.7) {
+  if (!file) return null;
+  const dataUrl = await fileToDataUrl(file);
+  const img = await new Promise((resolve, reject) => {
+    const image = new Image();
+    image.onload = () => resolve(image);
+    image.onerror = reject;
+    image.src = dataUrl;
+  });
+  const scale = Math.min(1, maxDim / Math.max(img.width, img.height));
+  const canvas = document.createElement("canvas");
+  canvas.width = Math.max(1, Math.round(img.width * scale));
+  canvas.height = Math.max(1, Math.round(img.height * scale));
+  const ctx = canvas.getContext("2d");
+  ctx.drawImage(img, 0, 0, canvas.width, canvas.height);
+  return canvas.toDataURL("image/jpeg", quality);
+}
+async function uploadPhoto(file) {
+  if (!file) return null;
+  return compressImage(file);
+}
+async function loginWithGoogle() {
+  if (useFirebase) {
+    const provider = new firebase.auth.GoogleAuthProvider();
+    await auth.signInWithPopup(provider);
+    return;
+  }
+  renderShell();
+}
+
+async function boot() {
+  if (useFirebase) {
+    auth.onAuthStateChanged(async user => {
+      currentUser = user;
+      if (!user) return renderAuth();
+      try {
+        const data = await apiJson("/me");
+        currentAdmin = data.user;
+        if (!currentAdmin.isAdmin) return renderForbidden();
+        renderShell();
+      } catch (error) {
+        renderAuth(error.message);
+      }
+    });
+  } else {
+    const user = demo.users.find(item => item.id === demo.sessionUid) || demo.users.find(item => item.isAdmin);
+    currentUser = { uid: user.id, email: user.email };
+    currentAdmin = { uid: user.id, email: user.email, isAdmin: true };
+    renderShell();
+  }
+}
+
+function renderAuth(error = "") {
+  document.getElementById("root").innerHTML = `
+    <div class="auth">
+      <div class="auth-box">
+        <div class="eyebrow">RANKED Admin</div>
+        <h1>Admin access</h1>
+        <p class="sub">Use a Firebase account marked as admin in <code>users/{uid}.isAdmin</code> or listed in <code>RANKED_ADMIN_EMAILS</code>.</p>
+        <div class="card">
+          ${error ? `<div class="msg err">${esc(error)}</div>` : ""}
+          ${!useFirebase ? `<div class="msg notice">Demo mode: admin@ranked.local / admin123</div>` : ""}
+          <button class="btn secondary" id="googleLogin" style="width:100%;margin-bottom:14px">Continue with Google</button>
+          <div class="field"><label>Email</label><input id="email" type="email" value="${useFirebase ? "" : "admin@ranked.local"}"></div>
+          <div class="field"><label>Password</label><input id="password" type="password" value="${useFirebase ? "" : "admin123"}"></div>
+          <button class="btn" id="login" style="width:100%">Log in</button>
+          <p class="sub"><a class="link" href="/ranked.html">Back to public site</a></p>
+        </div>
+      </div>
+    </div>
+  `;
+  document.getElementById("googleLogin").onclick = async () => {
+    try {
+      await loginWithGoogle();
+    } catch (err) {
+      renderAuth(err.message);
+    }
+  };
+  document.getElementById("login").onclick = async () => {
+    try {
+      if (useFirebase) await auth.signInWithEmailAndPassword(document.getElementById("email").value.trim(), document.getElementById("password").value);
+      else renderShell();
+    } catch (err) {
+      renderAuth(err.message);
+    }
+  };
+}
+
+function renderForbidden() {
+  document.getElementById("root").innerHTML = `
+    <div class="auth"><div class="auth-box"><div class="msg err">This account is not an admin.</div><a class="btn secondary" href="/ranked.html">Back to public site</a></div></div>
+  `;
+}
+
+function renderShell() {
+  document.getElementById("root").innerHTML = `
+    <div class="shell">
+      <aside class="sidebar">
+        <a class="brand" href="/ranked-admin.html"><span class="dot"></span>RANKED OPS</a>
+        <div class="nav">
+          <button data-tab="overview">Overview</button>
+          <button data-tab="institutions">Institutions</button>
+          <button data-tab="nominations">Nominations</button>
+          <button data-tab="candidates">Candidates</button>
+          <button data-tab="audit">Audit log</button>
+          <a href="/ranked.html">Public site</a>
+          <button id="logout">Log out</button>
+        </div>
+        <div class="side-foot">
+          ${useFirebase ? "Launch mode" : "Demo mode"}<br>
+          ${esc(currentAdmin?.email || "")}<br>
+          Adults-only institutions only.
+        </div>
+      </aside>
+      <main class="main">
+        <div class="topline">
+          <div><div class="eyebrow">Operations</div><h1 id="title">Overview</h1><p class="sub" id="subtitle">Review the health of the ranking network.</p></div>
+          <div class="toolbar"><button class="btn secondary" id="refresh">Refresh</button></div>
+        </div>
+        <div id="view"><div class="loading"></div></div>
+      </main>
+    </div>
+  `;
+  document.querySelectorAll("[data-tab]").forEach(button => {
+    button.onclick = () => {
+      activeTab = button.dataset.tab;
+      loadTab();
+    };
+  });
+  document.getElementById("refresh").onclick = loadTab;
+  document.getElementById("logout").onclick = async () => {
+    if (useFirebase) await auth.signOut();
+    else renderAuth();
+  };
+  loadTab();
+}
+
+function markNav() {
+  document.querySelectorAll("[data-tab]").forEach(button => button.classList.toggle("active", button.dataset.tab === activeTab));
+}
+function setHeader(title, subtitle) {
+  document.getElementById("title").textContent = title;
+  document.getElementById("subtitle").textContent = subtitle;
+}
+function renderError(error) {
+  document.getElementById("view").innerHTML = `<div class="msg err">${esc(error.message || error)}</div>`;
+}
+async function loadTab() {
+  markNav();
+  document.getElementById("view").innerHTML = `<div class="loading"></div>`;
+  try {
+    if (activeTab === "overview") return renderOverview();
+    if (activeTab === "institutions") return renderInstitutions();
+    if (activeTab === "nominations") return renderNominations();
+    if (activeTab === "candidates") return renderCandidates();
+    if (activeTab === "audit") return renderAudit();
+  } catch (error) {
+    renderError(error);
+  }
+}
+
+async function fetchInstitutions(all = true) {
+  if (useFirebase) return (await apiJson(`/institutions${all ? "?all=1" : ""}`)).institutions || [];
+  return [...demo.institutions].sort((a, b) => a.name.localeCompare(b.name));
+}
+async function fetchCandidates(status = "confirmed") {
+  if (useFirebase) return (await apiJson(`/admin/candidates?status=${encodeURIComponent(status)}`)).candidates || [];
+  return demo.candidates.filter(item => !status || item.status === status).sort((a, b) => (b.createdAt || 0) - (a.createdAt || 0));
+}
+async function fetchNominations(status = "") {
+  if (useFirebase) return (await apiJson(`/admin/nominations${status ? `?status=${status}` : ""}`)).nominations || [];
+  return demo.nominations.filter(item => !status || item.status === status).sort((a, b) => (b.createdAt || 0) - (a.createdAt || 0));
+}
+
+async function renderOverview() {
+  setHeader("Overview", "The launch cockpit: growth, moderation load, and trust signals.");
+  const [institutions, candidates, pending, flagged] = useFirebase
+    ? await Promise.all([
+      apiJson("/institutions?all=1").then(d => d.institutions || []),
+      fetchCandidates("confirmed"),
+      fetchNominations("pending"),
+      fetchNominations("flagged")
+    ])
+    : await Promise.all([fetchInstitutions(true), fetchCandidates("confirmed"), fetchNominations("pending"), fetchNominations("flagged")]);
+  document.getElementById("view").innerHTML = `
+    ${!useFirebase ? `<div class="msg notice">Demo mode is editing local browser data. Paste Firebase config in <code>ranked-config.js</code> and use the backend routes for launch.</div>` : ""}
+    <div class="grid">
+      <div class="metric"><div class="label">Institutions</div><div class="value">${institutions.length}</div></div>
+      <div class="metric"><div class="label">Live candidates</div><div class="value">${candidates.length}</div></div>
+      <div class="metric"><div class="label">Pending consent</div><div class="value">${pending.length}</div></div>
+      <div class="metric"><div class="label">Flagged</div><div class="value">${flagged.length}</div></div>
+    </div>
+    <div class="split">
+      <div class="card"><h2>Pending confirmations</h2>${miniNominationTable(pending)}</div>
+      <div class="card"><h2>Flagged nominations</h2>${miniNominationTable(flagged)}</div>
+    </div>
+  `;
+}
+
+function miniNominationTable(rows) {
+  if (!rows.length) return `<div class="empty">Nothing in this queue.</div>`;
+  return `<div class="table-wrap"><table><tr><th>Name</th><th>Board</th><th>Institution</th><th>Link</th></tr>${rows.slice(0, 8).map(row => `<tr><td>${esc(row.candidateName)}</td><td>${esc(row.gender)}</td><td>${esc(row.institutionName || row.institutionId)}</td><td><a class="link" href="/ranked.html#/confirm/${row.confirmToken}">open</a></td></tr>`).join("")}</table></div>`;
+}
+
+async function renderInstitutions() {
+  setHeader("Institutions", "Curate adult-only colleges, universities, and companies.");
+  const rows = await fetchInstitutions(true);
+  document.getElementById("view").innerHTML = `
+    <div class="card">
+      <h2>Add institution</h2>
+      <div id="institutionMsg"></div>
+      <div class="form-grid">
+        <div class="field"><label>Name</label><input id="institutionName" type="text" placeholder="e.g. Columbia University"></div>
+        <div class="field"><label>Type</label><select id="institutionType"><option value="college">College / University</option><option value="company">Company</option></select></div>
+        <div class="field"><label>&nbsp;</label><button class="btn" id="addInstitution" style="width:100%">Add</button></div>
+      </div>
+    </div>
+    <div class="table-wrap"><table>
+      <tr><th>Name</th><th>Type</th><th>Status</th><th>Ranked</th><th>Actions</th></tr>
+      ${rows.map(row => `<tr><td>${esc(row.name)}</td><td>${esc(row.type)}</td><td><span class="badge ${row.status}">${esc(row.status)}</span></td><td>${row.candidateCount || 0}</td><td><button class="btn secondary" data-hide-inst="${row.id}">Hide</button> <button class="btn danger" data-delete-inst="${row.id}">Delete</button></td></tr>`).join("") || `<tr><td colspan="5">No institutions yet.</td></tr>`}
+    </table></div>
+  `;
+  document.getElementById("addInstitution").onclick = async () => {
+    const name = document.getElementById("institutionName").value.trim();
+    const type = document.getElementById("institutionType").value;
+    try {
+      if (useFirebase) await apiJson("/admin/institutions", { method: "POST", body: { name, type } });
+      else {
+        if (/\b(k-?12|school|public school|high school|middle school|primary|secondary|academy)\b/i.test(name)) throw new Error("K-12 schools are not allowed. Adults-only colleges, universities, and companies only.");
+        demo.institutions.push({ id: uid(), name, type, status: "approved", candidateCount: 0, createdAt: Date.now() });
+        audit("institution_created", { name, type });
+        saveDemo();
+      }
+      renderInstitutions();
+    } catch (error) {
+      document.getElementById("institutionMsg").innerHTML = `<div class="msg err">${esc(error.message)}</div>`;
+    }
+  };
+  document.querySelectorAll("[data-hide-inst]").forEach(button => button.onclick = async () => {
+    if (useFirebase) await apiJson(`/admin/institutions/${button.dataset.hideInst}`, { method: "PATCH", body: { status: "hidden" } });
+    else {
+      const item = demo.institutions.find(inst => inst.id === button.dataset.hideInst);
+      if (item) item.status = "hidden";
+      audit("institution_hidden", { institutionId: button.dataset.hideInst });
+      saveDemo();
+    }
+    renderInstitutions();
+  });
+  document.querySelectorAll("[data-delete-inst]").forEach(button => button.onclick = async () => {
+    if (!confirm("Delete this institution? Candidates must be removed first in launch mode.")) return;
+    if (useFirebase) await apiJson(`/admin/institutions/${button.dataset.deleteInst}`, { method: "DELETE" });
+    else {
+      demo.institutions = demo.institutions.filter(inst => inst.id !== button.dataset.deleteInst);
+      audit("institution_deleted", { institutionId: button.dataset.deleteInst });
+      saveDemo();
+    }
+    renderInstitutions();
+  });
+}
+
+async function renderNominations() {
+  setHeader("Nominations", "Moderate consent links before they become public listings.");
+  const rows = await fetchNominations("");
+  document.getElementById("view").innerHTML = `
+    <div class="table-wrap"><table>
+      <tr><th>Name</th><th>Board</th><th>Institution</th><th>Status</th><th>Confirm link</th><th>Actions</th></tr>
+      ${rows.map(row => `<tr><td>${esc(row.candidateName)}</td><td>${esc(row.gender)}</td><td>${esc(row.institutionName || row.institutionId)}</td><td><span class="badge ${row.status}">${esc(row.status)}</span></td><td><a class="link" href="/ranked.html#/confirm/${row.confirmToken}">open</a></td><td>${["pending", "flagged"].includes(row.status) ? `<button class="btn danger" data-reject-nom="${row.id}">Reject</button>` : ""}</td></tr>`).join("") || `<tr><td colspan="6">No nominations yet.</td></tr>`}
+    </table></div>
+  `;
+  document.querySelectorAll("[data-reject-nom]").forEach(button => button.onclick = async () => {
+    if (!confirm("Reject this nomination?")) return;
+    if (useFirebase) await apiJson(`/admin/nominations/${button.dataset.rejectNom}/reject`, { method: "POST", body: { reason: "Rejected by admin" } });
+    else {
+      const item = demo.nominations.find(nom => nom.id === button.dataset.rejectNom);
+      if (item) item.status = "rejected";
+      audit("nomination_rejected", { nominationId: button.dataset.rejectNom });
+      saveDemo();
+    }
+    renderNominations();
+  });
+}
+
+async function renderCandidates() {
+  setHeader("Candidates", "Create confirmed listings, inspect ranks, and remove bad records.");
+  const [institutions, rows] = await Promise.all([fetchInstitutions(false), fetchCandidates("")]);
+  adminPhotoFile = null;
+  document.getElementById("view").innerHTML = `
+    <div class="card">
+      <h2>Add confirmed candidate</h2>
+      <div id="candidateMsg"></div>
+      <div class="form-grid">
+        <div class="field"><label>Name</label><input id="candidateName" type="text" placeholder="Candidate name"></div>
+        <div class="field"><label>Institution</label><select id="candidateInstitution"><option value="">Select</option>${institutions.filter(i => i.status === "approved").map(row => `<option value="${row.id}">${esc(row.name)}</option>`).join("")}</select></div>
+        <div class="field"><label>Board</label><select id="candidateGender"><option value="chad">Chad</option><option value="stacy">Stacy</option></select></div>
+      </div>
+      <div class="field"><label>Photo</label><button class="drop" id="photoDrop" type="button">Click to upload<span id="photoPreview"></span></button><input id="photoInput" type="file" accept="image/*" hidden></div>
+      <button class="btn" id="addCandidate">Add confirmed candidate</button>
+    </div>
+    <div class="table-wrap"><table>
+      <tr><th>Name</th><th>Board</th><th>Institution</th><th>Up</th><th>Down</th><th>Status</th><th>Actions</th></tr>
+      ${rows.map(row => `<tr><td>${esc(row.name)}</td><td>${esc(row.gender)}</td><td>${esc(row.institutionName || row.institutionId)}</td><td>${row.upvotes || 0}</td><td>${row.downvotes || 0}</td><td><span class="badge ${row.status}">${esc(row.status)}</span></td><td>${row.status === "confirmed" ? `<button class="btn danger" data-remove-candidate="${row.id}">Remove</button>` : ""}</td></tr>`).join("") || `<tr><td colspan="7">No candidates yet.</td></tr>`}
+    </table></div>
+  `;
+  document.getElementById("photoDrop").onclick = () => document.getElementById("photoInput").click();
+  document.getElementById("photoInput").onchange = async event => {
+    adminPhotoFile = event.target.files[0] || null;
+    if (adminPhotoFile) document.getElementById("photoPreview").innerHTML = `<img src="${await fileToDataUrl(adminPhotoFile)}" alt="">`;
+  };
+  document.getElementById("addCandidate").onclick = async () => {
+    const name = document.getElementById("candidateName").value.trim();
+    const institutionId = document.getElementById("candidateInstitution").value;
+    const gender = document.getElementById("candidateGender").value;
+    try {
+      const photoURL = await uploadPhoto(adminPhotoFile);
+      if (useFirebase) await apiJson("/admin/candidates", { method: "POST", body: { name, institutionId, gender, photoURL } });
+      else {
+        const institution = demo.institutions.find(item => item.id === institutionId);
+        demo.candidates.push({ id: uid(), name, photoURL: photoURL || avatarData(initials(name), "#1b1b21"), gender, institutionId, institutionName: institution?.name || "", status: "confirmed", upvotes: 0, downvotes: 0, score: 0, createdAt: Date.now() });
+        if (institution) institution.candidateCount = (institution.candidateCount || 0) + 1;
+        audit("candidate_admin_created", { name, institutionId });
+        saveDemo();
+      }
+      renderCandidates();
+    } catch (error) {
+      document.getElementById("candidateMsg").innerHTML = `<div class="msg err">${esc(error.message)}</div>`;
+    }
+  };
+  document.querySelectorAll("[data-remove-candidate]").forEach(button => button.onclick = async () => {
+    if (!confirm("Remove this candidate from public rankings?")) return;
+    if (useFirebase) await apiJson(`/admin/candidates/${button.dataset.removeCandidate}`, { method: "DELETE" });
+    else {
+      const candidate = demo.candidates.find(item => item.id === button.dataset.removeCandidate);
+      if (candidate) candidate.status = "removed_by_admin";
+      demo.votes = demo.votes.filter(vote => vote.candidateId !== button.dataset.removeCandidate);
+      audit("candidate_admin_removed", { candidateId: button.dataset.removeCandidate });
+      saveDemo();
+    }
+    renderCandidates();
+  });
+}
+
+async function renderAudit() {
+  setHeader("Audit log", "A lightweight trail of sensitive operations.");
+  const events = useFirebase ? (await apiJson("/admin/audit")).events || [] : (demo.audit || []);
+  document.getElementById("view").innerHTML = `
+    <div class="table-wrap"><table>
+      <tr><th>Time</th><th>Actor</th><th>Action</th><th>Meta</th></tr>
+      ${events.map(event => `<tr><td>${esc(event.at || "")}</td><td>${esc(event.actorEmail || "")}</td><td>${esc(event.type)}</td><td>${esc(JSON.stringify(event.meta || {}))}</td></tr>`).join("") || `<tr><td colspan="4">No audit events yet.</td></tr>`}
+    </table></div>
+  `;
+}
+
+boot();
+</script>
+</body>
+</html>
