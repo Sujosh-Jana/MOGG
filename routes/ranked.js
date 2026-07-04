@@ -29,6 +29,7 @@ const adminLimiter = createRateLimiter({
 
 const ADULT_INSTITUTION_TYPES = new Set(['college', 'company']);
 const SCHOOL_BLOCKLIST = /\b(k-?12|school|public school|high school|middle school|primary|secondary|academy)\b/i;
+const SOCIAL_FIELDS = ['instagram', 'tiktok', 'twitter', 'youtube', 'snapchat', 'website'];
 
 router.get('/institutions', async (req, res, next) => {
   try {
@@ -257,6 +258,8 @@ router.post('/confirm/:token', authMiddleware, async (req, res, next) => {
         upvotes: 0,
         downvotes: 0,
         score: 0,
+        socialLinks: {},
+        bio: '',
         createdAt: FieldValue.serverTimestamp(),
         updatedAt: FieldValue.serverTimestamp(),
       };
@@ -303,6 +306,58 @@ router.post('/confirm/:token/flag', async (req, res, next) => {
       nominationId: nomination.id,
       reason: String(req.body?.reason || '').slice(0, 240),
     }));
+    res.json({ ok: true });
+  } catch (err) {
+    next(err);
+  }
+});
+
+router.get('/candidates/:id', async (req, res, next) => {
+  try {
+    const ref = db.collection('candidates').doc(String(req.params.id));
+    const snap = await ref.get();
+    if (!snap.exists || snap.data()?.status !== 'confirmed') {
+      return res.status(404).json({ error: 'Candidate not found' });
+    }
+    const data = snap.data() || {};
+    let rank = null;
+    let totalConfirmed = null;
+    if (data.institutionId && data.gender) {
+      const peers = await db.collection('candidates')
+        .where('institutionId', '==', data.institutionId)
+        .where('gender', '==', data.gender)
+        .where('status', '==', 'confirmed')
+        .orderBy('score', 'desc')
+        .get();
+      const index = peers.docs.findIndex((doc) => doc.id === snap.id);
+      rank = index === -1 ? null : index + 1;
+      totalConfirmed = peers.size;
+    }
+    res.json({ candidate: serializeDoc(snap), rank, totalConfirmed });
+  } catch (err) {
+    next(err);
+  }
+});
+
+router.patch('/candidates/:id/profile', authMiddleware, async (req, res, next) => {
+  try {
+    const candidate = await getCandidateForOwnerOrAdmin(req.params.id, req.user);
+    const body = req.body || {};
+    const patch = { updatedAt: FieldValue.serverTimestamp() };
+
+    if (body.socialLinks && typeof body.socialLinks === 'object') {
+      for (const field of SOCIAL_FIELDS) {
+        if (!Object.prototype.hasOwnProperty.call(body.socialLinks, field)) continue;
+        const raw = String(body.socialLinks[field] || '').trim();
+        patch[`socialLinks.${field}`] = raw ? (cleanUrl(raw) || null) : null;
+      }
+    }
+    if (typeof body.bio === 'string') {
+      patch.bio = body.bio.trim().slice(0, 280);
+    }
+
+    await candidate.ref.update(patch);
+    await db.collection('ranked_audit').add(buildAudit('candidate_profile_updated', req.user, { candidateId: candidate.id }));
     res.json({ ok: true });
   } catch (err) {
     next(err);

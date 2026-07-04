@@ -372,7 +372,7 @@ h1 {
   font-size: 11px;
   font-weight: 700;
 }
-.field input, .field select {
+.field input, .field select, .field textarea {
   width: 100%;
   min-height: 42px;
   border: 1px solid var(--line);
@@ -382,8 +382,38 @@ h1 {
   color: var(--text);
   padding: 10px 11px;
   font-size: 13px;
+  font-family: inherit;
+  resize: vertical;
 }
-.field input:focus, .field select:focus { border-color: var(--gold); }
+.field input:focus, .field select:focus, .field textarea:focus { border-color: var(--gold); }
+
+.profile-head {
+  display: flex;
+  align-items: center;
+  gap: 20px;
+  margin: 18px 0;
+  flex-wrap: wrap;
+}
+.social-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-bottom: 20px;
+}
+.social-pill {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 8px 14px;
+  border-radius: 999px;
+  border: 1px solid var(--line);
+  background: var(--panel-2);
+  color: var(--text) !important;
+  text-decoration: none !important;
+  font-size: 12.5px;
+  font-weight: 600;
+}
+.social-pill:hover { border-color: var(--gold); }
 .radio-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 10px; }
 .radio {
   min-height: 42px;
@@ -441,6 +471,33 @@ h1 {
   animation: spin .7s linear infinite;
 }
 @keyframes spin { to { transform: rotate(360deg); } }
+
+#toastHost {
+  position: fixed;
+  bottom: 18px;
+  left: 50%;
+  transform: translateX(-50%);
+  z-index: 999;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  align-items: center;
+  pointer-events: none;
+}
+.toast {
+  padding: 10px 16px;
+  border-radius: 999px;
+  font-size: 12.5px;
+  font-weight: 600;
+  box-shadow: 0 8px 24px rgba(0,0,0,.4);
+  animation: toast-in .18s ease-out;
+  border: 1px solid var(--line);
+  background: var(--panel);
+  color: var(--text);
+}
+.toast.err { border-color: var(--red); color: #fecdd3; }
+.toast.ok { border-color: var(--green); color: #a7f3d0; }
+@keyframes toast-in { from { opacity: 0; transform: translateY(6px); } to { opacity: 1; transform: translateY(0); } }
 
 .table-wrap {
   overflow-x: auto;
@@ -506,6 +563,7 @@ tr:last-child td { border-bottom: 0; }
     <nav class="nav" id="nav"></nav>
   </div>
   <main id="main"><div class="loading"></div></main>
+  <div id="toastHost"></div>
 </div>
 
 <script>
@@ -579,6 +637,16 @@ function placeholder(name) { return avatarData(initials(name), "#1b1b21"); }
 function isAdmin() { return !!currentUserDoc?.isAdmin; }
 function route() { return location.hash.replace(/^#\/?/, "").split("/").filter(Boolean); }
 function go(path) { location.hash = path; }
+
+function showToast(message, type = "") {
+  const host = document.getElementById("toastHost");
+  if (!host) return;
+  const el = document.createElement("div");
+  el.className = `toast ${type}`;
+  el.textContent = message;
+  host.appendChild(el);
+  setTimeout(() => el.remove(), 3200);
+}
 
 async function fileToDataUrl(file) {
   if (!file) return null;
@@ -764,6 +832,20 @@ async function getCandidates(filter = {}) {
     .sort((a, b) => filter.orderByCreated ? b.createdAt - a.createdAt : (b.score || b.upvotes || 0) - (a.score || a.upvotes || 0));
 }
 
+async function getCandidateProfile(id) {
+  if (hasFirebaseConfig) {
+    const data = await apiJson(`/candidates/${encodeURIComponent(id)}`);
+    return data;
+  }
+  const candidate = demo.candidates.find(item => item.id === id && item.status === "confirmed");
+  if (!candidate) return { candidate: null, rank: null, totalConfirmed: null };
+  const peers = demo.candidates
+    .filter(item => item.institutionId === candidate.institutionId && item.gender === candidate.gender && item.status === "confirmed")
+    .sort((a, b) => (b.score || b.upvotes || 0) - (a.score || a.upvotes || 0));
+  const rank = peers.findIndex(item => item.id === id) + 1;
+  return { candidate, rank: rank || null, totalConfirmed: peers.length };
+}
+
 async function getVotesForUser(institutionId) {
   if (!currentUser) return {};
   if (hasFirebaseConfig) {
@@ -784,6 +866,7 @@ async function router() {
   try {
     if (!parts.length) return renderHome();
     if (parts[0] === "institution" && parts[1]) return renderLeaderboard(parts[1], parts[2] || "chad");
+    if (parts[0] === "candidate" && parts[1]) return renderCandidateProfile(parts[1]);
     if (parts[0] === "nominate") return requireAuth(renderNominate);
     if (parts[0] === "confirm" && parts[1]) return renderConfirm(parts[1]);
     if (parts[0] === "login") return renderLogin();
@@ -816,9 +899,9 @@ async function renderHome() {
   const main = document.getElementById("main");
   main.innerHTML = `
     ${!hasFirebaseConfig ? `<div class="notice">Demo mode is active. Paste your Firebase config in <b>ranked.html</b> to connect auth, Firestore, and Storage. Admin demo login: <b>admin@ranked.local</b> / <b>admin123</b>.</div>` : ""}
-    <div class="eyebrow">Pick your arena</div>
-    <h1>Institution Leaderboards</h1>
-    <p class="sub">Opt-in Chad and Stacy boards, separated by college or company. Candidates only appear after confirming their nomination.</p>
+    <div class="eyebrow">Put The Fries In The Bag</div>
+    <h1>67 Leaderboards</h1>
+    <p class="sub">brainrot chad stacy ranking board</p>
     <div class="search"><span>⌕</span><input id="institutionSearch" type="text" placeholder="Search institutions"></div>
     <div class="tabs">
       <button class="tab active" data-type="all">All</button>
@@ -908,21 +991,319 @@ function candidateRow(candidate, index, myVotes) {
   return `
     <div class="candidate-row ${rank === 1 ? "top" : ""}">
       <div class="rank">${rank}</div>
-      <img class="avatar" src="${candidate.photoURL || placeholder(candidate.name)}" alt="">
-      <div>
-        <div class="candidate-name">${esc(candidate.name)}</div>
-        <div class="candidate-meta">
-          <span class="score">${candidate.upvotes || 0} upvotes</span>
-          - <span class="down">${candidate.downvotes || 0} downvotes</span>
-          - raw vote rank
+      <a href="#/candidate/${candidate.id}" style="display:flex;align-items:center;gap:12px;flex:1;min-width:0;text-decoration:none;color:inherit">
+        <img class="avatar" src="${candidate.photoURL || placeholder(candidate.name)}" alt="">
+        <div style="min-width:0">
+          <div class="candidate-name">${esc(candidate.name)}</div>
+          <div class="candidate-meta">
+            <span class="score">${candidate.upvotes || 0} upvotes</span>
+            - <span class="down">${candidate.downvotes || 0} downvotes</span>
+          </div>
         </div>
-      </div>
+      </a>
       <div class="votes">
         <button class="vote ${direction === "up" ? "on-up" : ""}" data-candidate="${candidate.id}" data-vote="up" title="Upvote">▲</button>
         <button class="vote ${direction === "down" ? "on-down" : ""}" data-candidate="${candidate.id}" data-vote="down" title="Downvote">▼</button>
       </div>
     </div>
   `;
+}
+
+function formatJoinedDate(iso) {
+  if (!iso) return "recently";
+  try {
+    return new Date(iso).toLocaleDateString(undefined, { year: "numeric", month: "long", day: "numeric" });
+  } catch {
+    return "recently";
+  }
+}
+
+const SOCIAL_META = {
+  instagram: { label: "Instagram", icon: "📸" },
+  tiktok: { label: "TikTok", icon: "🎵" },
+  twitter: { label: "X / Twitter", icon: "✕" },
+  youtube: { label: "YouTube", icon: "▶" },
+  snapchat: { label: "Snapchat", icon: "👻" },
+  website: { label: "Website", icon: "🔗" },
+};
+
+async function renderCandidateProfile(id) {
+  const main = document.getElementById("main");
+  let result;
+  try {
+    result = await getCandidateProfile(id);
+  } catch (error) {
+    main.innerHTML = `<div class="msg err">${esc(error.message)}</div>`;
+    return;
+  }
+  const { candidate, rank, totalConfirmed } = result;
+  if (!candidate) {
+    main.innerHTML = `<div class="empty">This profile doesn't exist or isn't public.</div>`;
+    return;
+  }
+  let myDirection = null;
+  if (currentUser) {
+    try {
+      const myVotes = await getVotesForUser(candidate.institutionId);
+      myDirection = myVotes[candidate.id] || null;
+    } catch {
+      myDirection = null;
+    }
+  }
+
+  const isOwner = currentUser && candidate.confirmedUid === currentUser.uid;
+  const links = Object.entries(SOCIAL_META)
+    .filter(([key]) => candidate.socialLinks?.[key])
+    .map(([key, meta]) => `<a class="social-pill" href="${esc(candidate.socialLinks[key])}" target="_blank" rel="noopener">${meta.icon} ${meta.label}</a>`)
+    .join("");
+
+  main.innerHTML = `
+    <div class="breadcrumb"><a href="#/institution/${candidate.institutionId}/${candidate.gender}">${esc(candidate.institutionName || "Leaderboard")}</a> / ${esc(candidate.name)}</div>
+    <div class="profile-head">
+      <img class="avatar" style="width:96px;height:96px" src="${candidate.photoURL || placeholder(candidate.name)}" alt="">
+      <div>
+        <h1 style="margin:0 0 4px">${esc(candidate.name)}</h1>
+        <p class="sub" style="margin:0">${rank ? `#${rank}${totalConfirmed ? ` of ${totalConfirmed}` : ""} ${candidate.gender === "chad" ? "CHAD" : "STACY"} at ${esc(candidate.institutionName || "")}` : esc(candidate.institutionName || "")}</p>
+        <p class="candidate-meta" style="margin-top:6px">On MOGGOFF since ${formatJoinedDate(candidate.createdAt)}</p>
+      </div>
+    </div>
+    ${candidate.bio ? `<p class="sub" style="margin:16px 0">${esc(candidate.bio)}</p>` : ""}
+    ${links ? `<div class="social-row">${links}</div>` : ""}
+    <div class="votes" style="justify-content:flex-start;gap:10px;margin:20px 0">
+      <button class="vote ${myDirection === "up" ? "on-up" : ""}" id="profileUp" title="Upvote">▲ ${candidate.upvotes || 0}</button>
+      <button class="vote ${myDirection === "down" ? "on-down" : ""}" id="profileDown" title="Downvote">▼ ${candidate.downvotes || 0}</button>
+    </div>
+    <div class="card" style="margin-bottom:20px">
+      <div class="eyebrow">Share</div>
+      <p class="sub" style="margin-top:4px">Generate a share card for this profile.</p>
+      <canvas id="shareCanvas" width="1000" height="1000" style="display:none"></canvas>
+      <img id="shareCardImg" style="width:100%;max-width:280px;border-radius:12px;border:1px solid var(--line);margin:10px 0;display:none">
+      <div style="display:flex;gap:10px;flex-wrap:wrap">
+        <button class="btn btn-secondary" id="genShareBtn">Generate share card</button>
+        <button class="btn" id="downloadShareBtn" style="display:none">Download</button>
+      </div>
+    </div>
+    ${isOwner ? renderOwnerPanel(candidate) : ""}
+  `;
+
+  document.getElementById("profileUp").onclick = () => handleProfileVote(candidate, "up");
+  document.getElementById("profileDown").onclick = () => handleProfileVote(candidate, "down");
+  document.getElementById("genShareBtn").onclick = () => generateShareCard(candidate, rank, totalConfirmed);
+  if (isOwner) wireOwnerPanel(candidate);
+}
+
+async function handleProfileVote(candidate, direction) {
+  if (!currentUser) { go("/login"); return; }
+  const upBtn = document.getElementById("profileUp");
+  const downBtn = document.getElementById("profileDown");
+
+  if (!hasFirebaseConfig) {
+    const existing = demo.votes.find(item => item.candidateId === candidate.id && item.voterUid === currentUser.uid);
+    let nowDirection = direction;
+    if (existing?.direction === direction) {
+      if (direction === "up") candidate.upvotes = Math.max(0, (candidate.upvotes || 0) - 1);
+      if (direction === "down") candidate.downvotes = Math.max(0, (candidate.downvotes || 0) - 1);
+      demo.votes = demo.votes.filter(item => item !== existing);
+      nowDirection = null;
+    } else {
+      if (existing?.direction === "up") candidate.upvotes = Math.max(0, (candidate.upvotes || 0) - 1);
+      if (existing?.direction === "down") candidate.downvotes = Math.max(0, (candidate.downvotes || 0) - 1);
+      if (direction === "up") candidate.upvotes = (candidate.upvotes || 0) + 1;
+      if (direction === "down") candidate.downvotes = (candidate.downvotes || 0) + 1;
+      if (existing) existing.direction = direction;
+      else demo.votes.push({ id: `${candidate.id}_${currentUser.uid}`, candidateId: candidate.id, institutionId: candidate.institutionId, voterUid: currentUser.uid, direction, updatedAt: Date.now() });
+    }
+    candidate.score = candidate.upvotes || 0;
+    saveDemo();
+    upBtn.textContent = `▲ ${candidate.upvotes || 0}`;
+    downBtn.textContent = `▼ ${candidate.downvotes || 0}`;
+    upBtn.classList.toggle("on-up", nowDirection === "up");
+    downBtn.classList.toggle("on-down", nowDirection === "down");
+    loadTicker();
+    return;
+  }
+
+  const previousUp = candidate.upvotes || 0;
+  const previousDown = candidate.downvotes || 0;
+  if (direction === "up") candidate.upvotes = previousUp + 1;
+  if (direction === "down") candidate.downvotes = previousDown + 1;
+  upBtn.textContent = `▲ ${candidate.upvotes || 0}`;
+  downBtn.textContent = `▼ ${candidate.downvotes || 0}`;
+  try {
+    await apiJson("/votes", { method: "POST", body: { candidateId: candidate.id, direction } });
+    showToast("Vote counted.", "ok");
+  } catch (error) {
+    candidate.upvotes = previousUp;
+    candidate.downvotes = previousDown;
+    upBtn.textContent = `▲ ${candidate.upvotes || 0}`;
+    downBtn.textContent = `▼ ${candidate.downvotes || 0}`;
+    showToast(error.message || "Vote didn't go through.", "err");
+  }
+}
+
+function renderOwnerPanel(candidate) {
+  return `
+    <div class="card">
+      <div class="eyebrow">This is your profile</div>
+      <h2 style="margin-top:4px">Edit your listing</h2>
+      <div id="ownerMsg"></div>
+      <div class="field">
+        <label>Photo</label>
+        <button class="drop" id="ownerPhotoDrop" type="button">Click to upload new photo</button>
+        <input id="ownerPhotoInput" type="file" accept="image/*" hidden>
+      </div>
+      <div class="field"><label>Bio (max 280 characters)</label><textarea id="ownerBio" rows="3" maxlength="280">${esc(candidate.bio || "")}</textarea></div>
+      ${Object.entries(SOCIAL_META).map(([key, meta]) => `
+        <div class="field"><label>${meta.label}</label><input id="social_${key}" type="url" placeholder="https://..." value="${esc(candidate.socialLinks?.[key] || "")}"></div>
+      `).join("")}
+      <button class="btn" id="ownerSaveBtn" style="width:100%;margin-bottom:10px">Save changes</button>
+      <button class="btn btn-danger" id="ownerOptOutBtn" style="width:100%">Remove me from MOGGOFF</button>
+    </div>
+  `;
+}
+
+function wireOwnerPanel(candidate) {
+  const msg = document.getElementById("ownerMsg");
+  document.getElementById("ownerPhotoDrop").onclick = () => document.getElementById("ownerPhotoInput").click();
+  document.getElementById("ownerPhotoInput").onchange = async event => {
+    const file = event.target.files[0];
+    if (!file) return;
+    try {
+      const photoURL = await uploadPhoto(file);
+      if (hasFirebaseConfig) await apiJson(`/candidates/${encodeURIComponent(candidate.id)}/photo`, { method: "PATCH", body: { photoURL } });
+      else { candidate.photoURL = photoURL; saveDemo(); }
+      msg.innerHTML = `<div class="msg ok">Photo updated.</div>`;
+      document.querySelector(".profile-head .avatar").src = photoURL;
+    } catch (error) {
+      msg.innerHTML = `<div class="msg err">${esc(error.message)}</div>`;
+    }
+  };
+  document.getElementById("ownerSaveBtn").onclick = async () => {
+    const button = document.getElementById("ownerSaveBtn");
+    button.disabled = true;
+    button.textContent = "Saving...";
+    const bio = document.getElementById("ownerBio").value.trim().slice(0, 280);
+    const socialLinks = {};
+    Object.keys(SOCIAL_META).forEach(key => { socialLinks[key] = document.getElementById(`social_${key}`).value.trim(); });
+    try {
+      if (hasFirebaseConfig) {
+        await apiJson(`/candidates/${encodeURIComponent(candidate.id)}/profile`, { method: "PATCH", body: { bio, socialLinks } });
+      } else {
+        candidate.bio = bio;
+        candidate.socialLinks = socialLinks;
+        saveDemo();
+      }
+      msg.innerHTML = `<div class="msg ok">Saved.</div>`;
+    } catch (error) {
+      msg.innerHTML = `<div class="msg err">${esc(error.message)}</div>`;
+    } finally {
+      button.disabled = false;
+      button.textContent = "Save changes";
+    }
+  };
+  document.getElementById("ownerOptOutBtn").onclick = async () => {
+    if (!confirm("Remove this listing and its votes? This can't be undone.")) return;
+    try {
+      if (hasFirebaseConfig) {
+        await apiJson(`/candidates/${encodeURIComponent(candidate.id)}/opt-out`, { method: "POST" });
+      } else {
+        demo.candidates = demo.candidates.filter(item => item.id !== candidate.id);
+        demo.votes = demo.votes.filter(item => item.candidateId !== candidate.id);
+        saveDemo();
+      }
+      go("/");
+      showToast("Your listing has been removed.", "ok");
+    } catch (error) {
+      msg.innerHTML = `<div class="msg err">${esc(error.message)}</div>`;
+    }
+  };
+}
+
+async function generateShareCard(candidate, rank, totalConfirmed) {
+  const canvas = document.getElementById("shareCanvas");
+  const ctx = canvas.getContext("2d");
+  const W = canvas.width, H = canvas.height;
+
+  const bgGrad = ctx.createLinearGradient(0, 0, 0, H);
+  bgGrad.addColorStop(0, "#121216");
+  bgGrad.addColorStop(1, "#09090a");
+  ctx.fillStyle = bgGrad;
+  ctx.fillRect(0, 0, W, H);
+
+  ctx.strokeStyle = "#2c2c34";
+  ctx.lineWidth = 3;
+  ctx.strokeRect(24, 24, W - 48, H - 48);
+
+  ctx.fillStyle = "#f0b429";
+  ctx.font = "bold 34px Arial";
+  ctx.fillText("MOGGOFF", 60, 100);
+
+  ctx.fillStyle = "#62626c";
+  ctx.font = "20px Arial";
+  ctx.fillText((candidate.gender === "chad" ? "CHAD" : "STACY") + " LEADERBOARD", 60, 132);
+
+  const photo = await loadImageSafe(candidate.photoURL || placeholder(candidate.name));
+  const cx = W / 2, cy = 430, radius = 220;
+  ctx.save();
+  ctx.beginPath();
+  ctx.arc(cx, cy, radius, 0, Math.PI * 2);
+  ctx.closePath();
+  ctx.clip();
+  if (photo) {
+    const scale = Math.max((radius * 2) / photo.width, (radius * 2) / photo.height);
+    const w = photo.width * scale, h = photo.height * scale;
+    ctx.drawImage(photo, cx - w / 2, cy - h / 2, w, h);
+  } else {
+    ctx.fillStyle = "#1b1b21";
+    ctx.fillRect(cx - radius, cy - radius, radius * 2, radius * 2);
+  }
+  ctx.restore();
+  ctx.beginPath();
+  ctx.arc(cx, cy, radius, 0, Math.PI * 2);
+  ctx.strokeStyle = "#f0b429";
+  ctx.lineWidth = 6;
+  ctx.stroke();
+
+  ctx.fillStyle = "#f1f1ef";
+  ctx.font = "bold 48px Arial";
+  ctx.textAlign = "center";
+  ctx.fillText(candidate.name, cx, 730);
+
+  ctx.fillStyle = "#96969f";
+  ctx.font = "24px Arial";
+  ctx.fillText(candidate.institutionName || "", cx, 768);
+
+  ctx.fillStyle = "#f0b429";
+  ctx.font = "bold 64px Arial";
+  ctx.fillText(rank ? `#${rank}${totalConfirmed ? ` / ${totalConfirmed}` : ""}` : "RANKED", cx, 860);
+
+  ctx.fillStyle = "#7dd3fc";
+  ctx.font = "26px Arial";
+  ctx.fillText(`${candidate.upvotes || 0} upvotes`, cx, 910);
+
+  ctx.textAlign = "left";
+  const dataUrl = canvas.toDataURL("image/png");
+  const img = document.getElementById("shareCardImg");
+  img.src = dataUrl;
+  img.style.display = "block";
+  const downloadBtn = document.getElementById("downloadShareBtn");
+  downloadBtn.style.display = "inline-block";
+  downloadBtn.onclick = () => {
+    const link = document.createElement("a");
+    link.href = dataUrl;
+    link.download = `${candidate.name.replace(/[^a-z0-9]+/gi, "-").toLowerCase()}-moggoff.png`;
+    link.click();
+  };
+}
+
+function loadImageSafe(src) {
+  return new Promise(resolve => {
+    const img = new Image();
+    img.crossOrigin = "anonymous";
+    img.onload = () => resolve(img);
+    img.onerror = () => resolve(null);
+    img.src = src;
+  });
 }
 
 async function handleVote(candidateId, institutionId, direction, gender) {
@@ -993,7 +1374,7 @@ async function handleVote(candidateId, institutionId, direction, gender) {
     else delete leaderboardState.myVotes[candidateId];
     leaderboardState.candidates.sort((a, b) => (b.score || b.upvotes || 0) - (a.score || a.upvotes || 0));
     renderCandidateList();
-    alert(error.message || "Vote didn't go through, try again.");
+    showToast(error.message || "Vote didn't go through, try again.", "err");
   }
 }
 
@@ -1115,7 +1496,7 @@ async function renderConfirm(token) {
     main.innerHTML = `
       <div class="eyebrow">Your listing</div>
       <h1>${esc(activeCandidate.name)}</h1>
-      <p class="sub">You are live on the board. You can replace your photo or remove yourself at any time from this link.</p>
+      <p class="sub">You are live on the board. <a class="link" href="#/candidate/${activeCandidate.id}">View and edit your public profile</a> to add social links, a bio, and a share card.</p>
       <div class="card">
         <div id="confirmMsg"></div>
         <img class="avatar" style="width:90px;height:90px;margin-bottom:16px" src="${activeCandidate.photoURL || placeholder(activeCandidate.name)}" alt="">
@@ -1216,11 +1597,16 @@ function renderLogin() {
     }
   };
   document.getElementById("loginBtn").onclick = async () => {
+    const button = document.getElementById("loginBtn");
+    button.disabled = true;
+    button.textContent = "Logging in...";
     try {
       await login(document.getElementById("loginEmail").value.trim(), document.getElementById("loginPassword").value);
       go("/");
     } catch (error) {
       document.getElementById("loginMsg").innerHTML = `<div class="msg err">${esc(error.message)}</div>`;
+      button.disabled = false;
+      button.textContent = "Log in";
     }
   };
 }
@@ -1247,11 +1633,16 @@ function renderSignup() {
     }
   };
   document.getElementById("signupBtn").onclick = async () => {
+    const button = document.getElementById("signupBtn");
+    button.disabled = true;
+    button.textContent = "Creating account...";
     try {
       await signup(document.getElementById("signupEmail").value.trim(), document.getElementById("signupPassword").value);
       go("/");
     } catch (error) {
       document.getElementById("signupMsg").innerHTML = `<div class="msg err">${esc(error.message)}</div>`;
+      button.disabled = false;
+      button.textContent = "Sign up";
     }
   };
 }
