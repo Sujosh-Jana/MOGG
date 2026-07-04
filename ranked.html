@@ -3,7 +3,8 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>RANKED - Institution Leaderboards</title>
+<title>MOGGOFF - Institution Leaderboards</title>
+<link rel="icon" type="image/svg+xml" href="/favicon.svg">
 <meta name="description" content="Opt-in institution leaderboards for Chad and Stacy rankings.">
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500;600;700;800&display=swap" rel="stylesheet">
@@ -501,7 +502,7 @@ tr:last-child td { border-bottom: 0; }
     </div>
   </div>
   <div class="topbar">
-    <a class="brand" href="#/"><span class="brand-dot"></span>RANKED</a>
+    <a class="brand" href="#/"><span class="brand-dot"></span>MOGGOFF</a>
     <nav class="nav" id="nav"></nav>
   </div>
   <main id="main"><div class="loading"></div></main>
@@ -825,7 +826,7 @@ async function renderHome() {
       <button class="tab" data-type="company">Companies</button>
     </div>
     <div class="institution-list" id="institutionList"></div>
-    <p class="footer-note">Adults-only MVP. No K-12 schools, comments, scraping, or non-consensual listings.</p>
+    <p class="footer-note">FOR ENTERTAINMENT LOL</p>
   `;
   const draw = () => {
     const term = document.getElementById("institutionSearch").value.trim().toLowerCase();
@@ -854,15 +855,20 @@ async function renderHome() {
   draw();
 }
 
+let leaderboardState = null;
+
 async function renderLeaderboard(institutionId, gender) {
-  const institution = await getInstitution(institutionId);
   const main = document.getElementById("main");
+  const [institution, candidates, myVotes] = await Promise.all([
+    getInstitution(institutionId),
+    getCandidates({ institutionId, gender, status: "confirmed" }),
+    getVotesForUser(institutionId),
+  ]);
   if (!institution) {
     main.innerHTML = `<div class="empty">Institution not found.</div>`;
     return;
   }
-  const candidates = await getCandidates({ institutionId, gender, status: "confirmed" });
-  const myVotes = await getVotesForUser(institutionId);
+  leaderboardState = { institutionId, gender, institution, candidates, myVotes };
   main.innerHTML = `
     <div class="breadcrumb"><a href="#/">All institutions</a> / ${esc(institution.name)}</div>
     <div class="leader-head">
@@ -875,13 +881,22 @@ async function renderLeaderboard(institutionId, gender) {
         <button class="${gender === "stacy" ? "active" : ""}" data-gender="stacy">STACY</button>
       </div>
     </div>
-    <div class="candidate-list">
-      ${candidates.length ? candidates.map((candidate, index) => candidateRow(candidate, index, myVotes)).join("") : `<div class="empty">No confirmed ${gender} candidates here yet. <a class="link" href="#/nominate">Nominate someone</a>.</div>`}
-    </div>
+    <div class="candidate-list" id="candidateList"></div>
   `;
+  renderCandidateList();
   document.querySelectorAll("[data-gender]").forEach(button => {
     button.onclick = () => go(`/institution/${institutionId}/${button.dataset.gender}`);
   });
+}
+
+function renderCandidateList() {
+  if (!leaderboardState) return;
+  const { candidates, myVotes, gender, institutionId } = leaderboardState;
+  const list = document.getElementById("candidateList");
+  if (!list) return;
+  list.innerHTML = candidates.length
+    ? candidates.map((candidate, index) => candidateRow(candidate, index, myVotes)).join("")
+    : `<div class="empty">No confirmed ${gender} candidates here yet. <a class="link" href="#/nominate">Nominate someone</a>.</div>`;
   document.querySelectorAll("[data-vote]").forEach(button => {
     button.onclick = () => handleVote(button.dataset.candidate, institutionId, button.dataset.vote, gender);
   });
@@ -915,9 +930,8 @@ async function handleVote(candidateId, institutionId, direction, gender) {
     go("/login");
     return;
   }
-  if (hasFirebaseConfig) {
-    await apiJson("/votes", { method: "POST", body: { candidateId, direction } });
-  } else {
+
+  if (!hasFirebaseConfig) {
     const candidate = demo.candidates.find(item => item.id === candidateId);
     if (!candidate) return;
     const existing = demo.votes.find(item => item.candidateId === candidateId && item.voterUid === currentUser.uid);
@@ -935,9 +949,52 @@ async function handleVote(candidateId, institutionId, direction, gender) {
     }
     candidate.score = candidate.upvotes || 0;
     saveDemo();
+    await renderLeaderboard(institutionId, gender);
+    loadTicker();
+    return;
   }
-  await renderLeaderboard(institutionId, gender);
-  loadTicker();
+
+  // Optimistic update: mutate the in-memory leaderboard immediately so the
+  // click feels instant, then sync with the server in the background. Only
+  // re-fetch from scratch if the server call actually fails.
+  if (!leaderboardState || leaderboardState.institutionId !== institutionId) return;
+  const candidate = leaderboardState.candidates.find(item => item.id === candidateId);
+  if (!candidate) return;
+
+  const previousDirection = leaderboardState.myVotes[candidateId];
+  const previousUp = candidate.upvotes || 0;
+  const previousDown = candidate.downvotes || 0;
+  const previousScore = candidate.score;
+
+  if (previousDirection === direction) {
+    if (direction === "up") candidate.upvotes = Math.max(0, (candidate.upvotes || 0) - 1);
+    if (direction === "down") candidate.downvotes = Math.max(0, (candidate.downvotes || 0) - 1);
+    delete leaderboardState.myVotes[candidateId];
+  } else {
+    if (previousDirection === "up") candidate.upvotes = Math.max(0, (candidate.upvotes || 0) - 1);
+    if (previousDirection === "down") candidate.downvotes = Math.max(0, (candidate.downvotes || 0) - 1);
+    if (direction === "up") candidate.upvotes = (candidate.upvotes || 0) + 1;
+    if (direction === "down") candidate.downvotes = (candidate.downvotes || 0) + 1;
+    leaderboardState.myVotes[candidateId] = direction;
+  }
+  candidate.score = candidate.upvotes || 0;
+  leaderboardState.candidates.sort((a, b) => (b.score || b.upvotes || 0) - (a.score || a.upvotes || 0));
+  renderCandidateList();
+
+  try {
+    await apiJson("/votes", { method: "POST", body: { candidateId, direction } });
+    loadTicker();
+  } catch (error) {
+    // Roll back the optimistic change and tell the person it didn't go through.
+    candidate.upvotes = previousUp;
+    candidate.downvotes = previousDown;
+    candidate.score = previousScore;
+    if (previousDirection) leaderboardState.myVotes[candidateId] = previousDirection;
+    else delete leaderboardState.myVotes[candidateId];
+    leaderboardState.candidates.sort((a, b) => (b.score || b.upvotes || 0) - (a.score || a.upvotes || 0));
+    renderCandidateList();
+    alert(error.message || "Vote didn't go through, try again.");
+  }
 }
 
 async function renderNominate() {
@@ -1067,7 +1124,7 @@ async function renderConfirm(token) {
           <button class="drop" id="replaceDrop" type="button">Click to upload new photo</button>
           <input id="replaceInput" type="file" accept="image/*" hidden>
         </div>
-        <button class="btn btn-danger" id="optOutBtn" style="width:100%">Remove me from RANKED</button>
+        <button class="btn btn-danger" id="optOutBtn" style="width:100%">Remove me from MOGGOFF</button>
       </div>
     `;
     document.getElementById("replaceDrop").onclick = () => document.getElementById("replaceInput").click();
