@@ -1,0 +1,1218 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>RANKED - Institution Leaderboards</title>
+<meta name="description" content="Opt-in institution leaderboards for Chad and Stacy rankings.">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500;600;700;800&display=swap" rel="stylesheet">
+<script src="https://www.gstatic.com/firebasejs/10.12.2/firebase-app-compat.js"></script>
+<script src="https://www.gstatic.com/firebasejs/10.12.2/firebase-auth-compat.js"></script>
+<script src="/ranked-config.js"></script>
+<style>
+:root {
+  --bg: #09090a;
+  --panel: #121216;
+  --panel-2: #18181d;
+  --panel-3: #202027;
+  --line: #2c2c34;
+  --line-soft: #222229;
+  --text: #f1f1ef;
+  --muted: #96969f;
+  --faint: #62626c;
+  --gold: #f0b429;
+  --blue: #7dd3fc;
+  --green: #34d399;
+  --red: #f43f5e;
+  --radius: 8px;
+}
+
+* { box-sizing: border-box; margin: 0; padding: 0; }
+html, body { min-height: 100%; background: var(--bg); color: var(--text); }
+body {
+  font-family: "JetBrains Mono", Consolas, monospace;
+  -webkit-font-smoothing: antialiased;
+}
+a { color: inherit; text-decoration: none; }
+button, input, select { font: inherit; }
+button { cursor: pointer; }
+img { display: block; }
+::selection { background: var(--gold); color: #050505; }
+
+#app { min-height: 100vh; display: flex; flex-direction: column; }
+
+.ticker {
+  height: 34px;
+  display: flex;
+  align-items: center;
+  overflow: hidden;
+  border-bottom: 1px solid var(--line-soft);
+  background: var(--panel);
+  white-space: nowrap;
+}
+.ticker-label {
+  height: 100%;
+  display: flex;
+  align-items: center;
+  padding: 0 12px;
+  background: var(--gold);
+  color: #070707;
+  font-size: 11px;
+  font-weight: 800;
+  text-transform: uppercase;
+  z-index: 1;
+}
+.ticker-track {
+  display: inline-flex;
+  min-width: 100%;
+  animation: ticker 34s linear infinite;
+}
+.ticker:hover .ticker-track { animation-play-state: paused; }
+@keyframes ticker {
+  from { transform: translateX(0); }
+  to { transform: translateX(-50%); }
+}
+.ticker-item {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  min-height: 34px;
+  padding: 0 18px;
+  border-right: 1px solid var(--line-soft);
+  color: var(--muted);
+  font-size: 12px;
+}
+.ticker-item b { color: var(--text); font-weight: 700; }
+.ticker-rank { color: var(--gold); font-weight: 800; }
+.ticker-score { color: var(--green); }
+
+.topbar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 20px;
+  padding: 15px 24px;
+  border-bottom: 1px solid var(--line-soft);
+  background: linear-gradient(180deg, #141417, #09090a);
+}
+.brand {
+  display: inline-flex;
+  align-items: center;
+  gap: 9px;
+  font-size: 17px;
+  font-weight: 800;
+}
+.brand-dot {
+  width: 9px;
+  height: 9px;
+  border-radius: 99px;
+  background: var(--green);
+  box-shadow: 0 0 12px rgba(52, 211, 153, .8);
+}
+.nav {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 14px;
+  color: var(--muted);
+  font-size: 12px;
+}
+.nav a, .nav button {
+  border: 0;
+  background: transparent;
+  color: var(--muted);
+}
+.nav a:hover, .nav button:hover { color: var(--text); }
+
+main {
+  width: 100%;
+  max-width: 960px;
+  margin: 0 auto;
+  padding: 30px 20px 72px;
+  flex: 1;
+}
+
+.notice {
+  margin-bottom: 18px;
+  padding: 11px 13px;
+  border: 1px solid rgba(125, 211, 252, .28);
+  border-radius: var(--radius);
+  background: rgba(125, 211, 252, .06);
+  color: #b8eaff;
+  font-size: 11px;
+  line-height: 1.6;
+}
+.eyebrow {
+  color: var(--gold);
+  font-size: 11px;
+  font-weight: 800;
+  text-transform: uppercase;
+  margin-bottom: 8px;
+}
+h1 {
+  margin-bottom: 7px;
+  font-size: 29px;
+  line-height: 1.15;
+  letter-spacing: 0;
+}
+.sub {
+  color: var(--muted);
+  font-size: 13px;
+  line-height: 1.7;
+  margin-bottom: 25px;
+}
+
+.btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 7px;
+  min-height: 38px;
+  border: 1px solid transparent;
+  border-radius: 7px;
+  background: var(--gold);
+  color: #070707;
+  padding: 9px 15px;
+  font-size: 12px;
+  font-weight: 800;
+  transition: transform .1s, opacity .15s, border-color .15s;
+}
+.btn:hover { opacity: .92; }
+.btn:active { transform: scale(.98); }
+.btn:disabled { opacity: .48; cursor: not-allowed; transform: none; }
+.btn-secondary {
+  border-color: var(--line);
+  background: var(--panel-2);
+  color: var(--text);
+}
+.btn-danger { background: var(--red); color: #fff; }
+.btn-sm { min-height: 30px; padding: 6px 10px; font-size: 11px; }
+
+.search {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  min-height: 48px;
+  margin-bottom: 16px;
+  padding: 0 14px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  background: var(--panel-2);
+}
+.search span { color: var(--faint); }
+.search input {
+  width: 100%;
+  border: 0;
+  outline: 0;
+  background: transparent;
+  color: var(--text);
+  font-size: 13px;
+}
+
+.tabs, .admin-tabs {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-bottom: 18px;
+}
+.tab {
+  min-height: 34px;
+  padding: 7px 13px;
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  background: transparent;
+  color: var(--muted);
+  font-size: 12px;
+  font-weight: 700;
+}
+.tab.active {
+  border-color: var(--text);
+  background: var(--text);
+  color: #070707;
+}
+
+.institution-list {
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  background: var(--line-soft);
+  gap: 1px;
+}
+.institution-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 18px;
+  padding: 15px 16px;
+  background: var(--panel-2);
+}
+.institution-row:hover { background: var(--panel-3); }
+.institution-name { font-size: 13.5px; font-weight: 800; }
+.institution-meta {
+  margin-top: 4px;
+  color: var(--faint);
+  font-size: 11px;
+}
+.chevron { color: var(--faint); font-weight: 800; }
+
+.breadcrumb {
+  color: var(--faint);
+  font-size: 11px;
+  margin-bottom: 16px;
+}
+.breadcrumb a { color: var(--muted); }
+.leader-head {
+  display: flex;
+  align-items: flex-end;
+  justify-content: space-between;
+  gap: 16px;
+  flex-wrap: wrap;
+  margin-bottom: 18px;
+}
+.switch {
+  display: inline-flex;
+  padding: 3px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  background: var(--panel-2);
+}
+.switch button {
+  min-width: 94px;
+  border: 0;
+  border-radius: 6px;
+  background: transparent;
+  color: var(--muted);
+  padding: 8px 13px;
+  font-size: 12px;
+  font-weight: 800;
+}
+.switch button.active { background: var(--gold); color: #070707; }
+
+.candidate-list { display: grid; gap: 8px; }
+.candidate-row {
+  display: grid;
+  grid-template-columns: 44px 58px minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 14px;
+  min-height: 82px;
+  padding: 12px 14px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  background: var(--panel-2);
+}
+.candidate-row:hover { border-color: #3a3a45; }
+.candidate-row.top { border-color: rgba(240, 180, 41, .8); box-shadow: inset 0 0 0 1px rgba(240, 180, 41, .5); }
+.rank {
+  text-align: center;
+  color: var(--faint);
+  font-size: 19px;
+  font-weight: 800;
+  font-variant-numeric: tabular-nums;
+}
+.top .rank { color: var(--gold); }
+.avatar {
+  width: 58px;
+  height: 58px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  object-fit: cover;
+  background: var(--panel);
+}
+.candidate-name {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  color: var(--text);
+  font-size: 14px;
+  font-weight: 800;
+  white-space: nowrap;
+}
+.candidate-meta {
+  margin-top: 4px;
+  color: var(--muted);
+  font-size: 11px;
+  line-height: 1.55;
+}
+.candidate-meta .score { color: var(--green); font-weight: 800; }
+.candidate-meta .down { color: var(--red); }
+.votes {
+  display: inline-grid;
+  grid-template-columns: 36px 36px;
+  gap: 7px;
+}
+.vote {
+  width: 36px;
+  height: 36px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  background: var(--panel);
+  color: var(--muted);
+  font-size: 15px;
+}
+.vote:hover { border-color: var(--muted); color: var(--text); }
+.vote.on-up { border-color: var(--green); background: rgba(52, 211, 153, .13); color: var(--green); }
+.vote.on-down { border-color: var(--red); background: rgba(244, 63, 94, .13); color: var(--red); }
+
+.card {
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  background: var(--panel-2);
+  padding: 20px;
+}
+.form-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 14px; }
+.field { margin-bottom: 15px; }
+.field:last-child { margin-bottom: 0; }
+.field label {
+  display: block;
+  margin-bottom: 6px;
+  color: var(--muted);
+  font-size: 11px;
+  font-weight: 700;
+}
+.field input, .field select {
+  width: 100%;
+  min-height: 42px;
+  border: 1px solid var(--line);
+  border-radius: 7px;
+  outline: 0;
+  background: var(--panel);
+  color: var(--text);
+  padding: 10px 11px;
+  font-size: 13px;
+}
+.field input:focus, .field select:focus { border-color: var(--gold); }
+.radio-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 10px; }
+.radio {
+  min-height: 42px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border: 1px solid var(--line);
+  border-radius: 7px;
+  background: var(--panel);
+  color: var(--muted);
+  font-size: 12px;
+  font-weight: 800;
+}
+.radio.active { border-color: var(--gold); color: var(--gold); }
+.drop {
+  min-height: 116px;
+  display: grid;
+  place-items: center;
+  gap: 9px;
+  border: 1px dashed #444451;
+  border-radius: var(--radius);
+  background: var(--panel);
+  color: var(--faint);
+  text-align: center;
+  font-size: 12px;
+}
+.drop img { width: 82px; height: 82px; border-radius: var(--radius); object-fit: cover; }
+.msg {
+  margin-bottom: 14px;
+  padding: 10px 12px;
+  border-radius: 7px;
+  font-size: 12px;
+  line-height: 1.6;
+}
+.msg.ok { border: 1px solid var(--green); background: rgba(52, 211, 153, .1); color: #a7f3d0; }
+.msg.err { border: 1px solid var(--red); background: rgba(244, 63, 94, .1); color: #fecdd3; }
+.msg a, .link { color: var(--blue); text-decoration: underline; }
+.empty {
+  padding: 28px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  background: var(--panel-2);
+  color: var(--faint);
+  text-align: center;
+  font-size: 12px;
+  line-height: 1.7;
+}
+.loading {
+  width: 18px;
+  height: 18px;
+  margin: 44px auto;
+  border: 2px solid var(--line);
+  border-top-color: var(--gold);
+  border-radius: 999px;
+  animation: spin .7s linear infinite;
+}
+@keyframes spin { to { transform: rotate(360deg); } }
+
+.table-wrap {
+  overflow-x: auto;
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+}
+table {
+  width: 100%;
+  min-width: 620px;
+  border-collapse: collapse;
+  background: var(--panel-2);
+  font-size: 12px;
+}
+th, td { padding: 10px; border-bottom: 1px solid var(--line-soft); text-align: left; }
+th { color: var(--faint); font-size: 11px; font-weight: 800; }
+tr:last-child td { border-bottom: 0; }
+.badge {
+  display: inline-flex;
+  align-items: center;
+  min-height: 20px;
+  padding: 2px 8px;
+  border-radius: 999px;
+  background: rgba(240, 180, 41, .14);
+  color: var(--gold);
+  font-size: 10px;
+  font-weight: 800;
+}
+.badge.confirmed, .badge.approved { background: rgba(52, 211, 153, .14); color: var(--green); }
+.badge.flagged { background: rgba(244, 63, 94, .14); color: var(--red); }
+.footer-note {
+  margin-top: 34px;
+  color: var(--faint);
+  font-size: 11px;
+  line-height: 1.7;
+  text-align: center;
+}
+
+@media (max-width: 700px) {
+  .topbar { align-items: flex-start; flex-direction: column; padding: 14px 16px; }
+  .nav { width: 100%; justify-content: space-between; gap: 9px; flex-wrap: wrap; }
+  main { padding: 24px 14px 58px; }
+  h1 { font-size: 24px; }
+  .candidate-row { grid-template-columns: 35px 52px minmax(0, 1fr); gap: 10px; }
+  .avatar { width: 52px; height: 52px; }
+  .votes { grid-column: 1 / -1; grid-template-columns: 1fr 1fr; }
+  .vote { width: 100%; }
+  .form-grid { grid-template-columns: 1fr; gap: 0; }
+  .switch { width: 100%; }
+  .switch button { flex: 1; min-width: 0; }
+}
+</style>
+</head>
+<body>
+<div id="app">
+  <div class="ticker">
+    <div class="ticker-label">LIVE RANK</div>
+    <div class="ticker-track" id="tickerTrack">
+      <span class="ticker-item">loading rankings...</span>
+    </div>
+  </div>
+  <div class="topbar">
+    <a class="brand" href="#/"><span class="brand-dot"></span>RANKED</a>
+    <nav class="nav" id="nav"></nav>
+  </div>
+  <main id="main"><div class="loading"></div></main>
+</div>
+
+<script>
+const firebaseConfig = window.RANKED_FIREBASE_CONFIG || {
+  apiKey: "YOUR_API_KEY",
+  authDomain: "YOUR_PROJECT.firebaseapp.com",
+  projectId: "YOUR_PROJECT_ID",
+  storageBucket: "YOUR_PROJECT.appspot.com",
+  messagingSenderId: "YOUR_SENDER_ID",
+  appId: "YOUR_APP_ID"
+};
+
+const hasFirebaseConfig = firebaseConfig.apiKey !== "YOUR_API_KEY" && !!window.firebase;
+const DEMO_KEY = "ranked-demo-v1";
+let auth = null;
+let currentUser = null;
+let currentUserDoc = null;
+let homeType = "all";
+let selectedNominationPhoto = null;
+
+if (hasFirebaseConfig && window.firebase) {
+  firebase.initializeApp(firebaseConfig);
+  auth = firebase.auth();
+}
+
+const seed = {
+  sessionUid: null,
+  users: [
+    { id: "admin-demo", email: "admin@ranked.local", password: "admin123", isAdmin: true, createdAt: Date.now() }
+  ],
+  institutions: [
+    { id: "harvard", name: "Harvard University", type: "college", status: "approved", candidateCount: 4, createdAt: Date.now() - 900000 },
+    { id: "stanford", name: "Stanford University", type: "college", status: "approved", candidateCount: 2, createdAt: Date.now() - 800000 },
+    { id: "google", name: "Google", type: "company", status: "approved", candidateCount: 2, createdAt: Date.now() - 700000 }
+  ],
+  nominations: [],
+  candidates: [
+    { id: "c1", name: "Alex Rivera", photoURL: avatarData("AR", "#14213d"), gender: "chad", institutionId: "harvard", status: "confirmed", confirmToken: "demo-alex", nominatedBy: "admin-demo", confirmedUid: "admin-demo", upvotes: 42, downvotes: 4, score: 42, createdAt: Date.now() - 600000 },
+    { id: "c2", name: "Maya Chen", photoURL: avatarData("MC", "#2f1b45"), gender: "stacy", institutionId: "harvard", status: "confirmed", confirmToken: "demo-maya", nominatedBy: "admin-demo", confirmedUid: "admin-demo", upvotes: 38, downvotes: 3, score: 38, createdAt: Date.now() - 560000 },
+    { id: "c3", name: "Noah Singh", photoURL: avatarData("NS", "#193d2f"), gender: "chad", institutionId: "harvard", status: "confirmed", confirmToken: "demo-noah", nominatedBy: "admin-demo", confirmedUid: "admin-demo", upvotes: 29, downvotes: 7, score: 29, createdAt: Date.now() - 520000 },
+    { id: "c4", name: "Iris Patel", photoURL: avatarData("IP", "#3d2916"), gender: "stacy", institutionId: "harvard", status: "confirmed", confirmToken: "demo-iris", nominatedBy: "admin-demo", confirmedUid: "admin-demo", upvotes: 25, downvotes: 2, score: 25, createdAt: Date.now() - 500000 },
+    { id: "c5", name: "Sofia Lane", photoURL: avatarData("SL", "#16343d"), gender: "stacy", institutionId: "stanford", status: "confirmed", confirmToken: "demo-sofia", nominatedBy: "admin-demo", confirmedUid: "admin-demo", upvotes: 31, downvotes: 5, score: 31, createdAt: Date.now() - 490000 },
+    { id: "c6", name: "Ryan Brooks", photoURL: avatarData("RB", "#35243a"), gender: "chad", institutionId: "stanford", status: "confirmed", confirmToken: "demo-ryan", nominatedBy: "admin-demo", confirmedUid: "admin-demo", upvotes: 27, downvotes: 2, score: 27, createdAt: Date.now() - 470000 },
+    { id: "c7", name: "Anika Rao", photoURL: avatarData("AR", "#273819"), gender: "stacy", institutionId: "google", status: "confirmed", confirmToken: "demo-anika", nominatedBy: "admin-demo", confirmedUid: "admin-demo", upvotes: 21, downvotes: 1, score: 21, createdAt: Date.now() - 450000 },
+    { id: "c8", name: "Ethan Cole", photoURL: avatarData("EC", "#3b1d24"), gender: "chad", institutionId: "google", status: "confirmed", confirmToken: "demo-ethan", nominatedBy: "admin-demo", confirmedUid: "admin-demo", upvotes: 19, downvotes: 4, score: 19, createdAt: Date.now() - 430000 }
+  ],
+  votes: []
+};
+
+function loadDemo() {
+  const saved = localStorage.getItem(DEMO_KEY);
+  if (saved) return JSON.parse(saved);
+  localStorage.setItem(DEMO_KEY, JSON.stringify(seed));
+  return JSON.parse(JSON.stringify(seed));
+}
+let demo = loadDemo();
+function saveDemo() { localStorage.setItem(DEMO_KEY, JSON.stringify(demo)); }
+
+function uid() { return Math.random().toString(36).slice(2) + Date.now().toString(36); }
+function esc(value) {
+  return String(value || "").replace(/[&<>"']/g, char => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[char]));
+}
+function avatarData(text, color) {
+  const svg = `<svg xmlns="http://www.w3.org/2000/svg" width="160" height="160"><rect width="160" height="160" fill="${color}"/><circle cx="126" cy="34" r="42" fill="rgba(255,255,255,.08)"/><text x="80" y="94" font-family="monospace" font-size="42" font-weight="800" text-anchor="middle" fill="#f1f1ef">${text}</text></svg>`;
+  return `data:image/svg+xml,${encodeURIComponent(svg)}`;
+}
+function initials(name) {
+  return (name || "?").split(/\s+/).filter(Boolean).map(part => part[0]).slice(0, 2).join("").toUpperCase() || "?";
+}
+function placeholder(name) { return avatarData(initials(name), "#1b1b21"); }
+function isAdmin() { return !!currentUserDoc?.isAdmin; }
+function route() { return location.hash.replace(/^#\/?/, "").split("/").filter(Boolean); }
+function go(path) { location.hash = path; }
+
+async function fileToDataUrl(file) {
+  if (!file) return null;
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onload = event => resolve(event.target.result);
+    reader.onerror = reject;
+    reader.readAsDataURL(file);
+  });
+}
+
+// Resizes + compresses an image client-side and returns a small JPEG data URL.
+// Photos are stored directly as this string on the candidate/nomination doc in
+// Firestore - no Firebase Storage (and no billing plan) required.
+async function compressImage(file, maxDim = 240, quality = 0.7) {
+  if (!file) return null;
+  const dataUrl = await fileToDataUrl(file);
+  const img = await new Promise((resolve, reject) => {
+    const image = new Image();
+    image.onload = () => resolve(image);
+    image.onerror = reject;
+    image.src = dataUrl;
+  });
+  const scale = Math.min(1, maxDim / Math.max(img.width, img.height));
+  const canvas = document.createElement("canvas");
+  canvas.width = Math.max(1, Math.round(img.width * scale));
+  canvas.height = Math.max(1, Math.round(img.height * scale));
+  const ctx = canvas.getContext("2d");
+  ctx.drawImage(img, 0, 0, canvas.width, canvas.height);
+  return canvas.toDataURL("image/jpeg", quality);
+}
+
+async function uploadPhoto(file) {
+  if (!file) return null;
+  return compressImage(file);
+}
+
+async function apiJson(path, options = {}) {
+  const headers = { ...(options.headers || {}) };
+  let body = options.body;
+  if (body && typeof body !== "string") {
+    headers["Content-Type"] = "application/json";
+    body = JSON.stringify(body);
+  }
+  if (hasFirebaseConfig && auth.currentUser) {
+    headers.Authorization = `Bearer ${await auth.currentUser.getIdToken()}`;
+  }
+  const response = await fetch(`/api/ranked${path}`, { ...options, headers, body });
+  const data = await response.json().catch(() => ({}));
+  if (!response.ok) throw new Error(data.error || "Request failed.");
+  return data;
+}
+
+async function boot() {
+  if (hasFirebaseConfig) {
+    auth.onAuthStateChanged(async user => {
+      currentUser = user;
+      currentUserDoc = user ? await ensureUserDoc(user) : null;
+      renderNav();
+      router();
+      loadTicker();
+    });
+  } else {
+    const user = demo.users.find(item => item.id === demo.sessionUid);
+    currentUser = user ? { uid: user.id, email: user.email } : null;
+    currentUserDoc = user ? { email: user.email, isAdmin: !!user.isAdmin } : null;
+    renderNav();
+    router();
+    loadTicker();
+  }
+}
+
+async function ensureUserDoc(user) {
+  // Always resolves via the backend /me route (server is the source of truth for
+  // isAdmin) — never call this outside the hasFirebaseConfig branch.
+  const data = await apiJson("/me");
+  return { email: data.user.email, isAdmin: !!data.user.isAdmin };
+}
+
+function renderNav() {
+  const nav = document.getElementById("nav");
+  if (currentUser) {
+    nav.innerHTML = `
+      <a href="#/nominate">+ Nominate</a>
+      ${isAdmin() ? `<a href="/ranked-admin.html">Admin</a>` : ""}
+      <span>${esc(currentUser.email.split("@")[0])}</span>
+      <button class="btn btn-secondary btn-sm" id="logoutBtn">Log out</button>
+    `;
+    document.getElementById("logoutBtn").onclick = logout;
+  } else {
+    nav.innerHTML = `<a href="#/login">Log in</a><a class="btn btn-sm" href="#/signup">Sign up</a>`;
+  }
+}
+
+async function logout() {
+  if (hasFirebaseConfig) return auth.signOut();
+  demo.sessionUid = null;
+  saveDemo();
+  currentUser = null;
+  currentUserDoc = null;
+  renderNav();
+  router();
+}
+
+async function login(email, password) {
+  if (hasFirebaseConfig) {
+    await auth.signInWithEmailAndPassword(email, password);
+    return;
+  }
+  const user = demo.users.find(item => item.email.toLowerCase() === email.toLowerCase() && item.password === password);
+  if (!user) throw new Error("Invalid demo login. Try admin@ranked.local / admin123.");
+  demo.sessionUid = user.id;
+  saveDemo();
+  currentUser = { uid: user.id, email: user.email };
+  currentUserDoc = { email: user.email, isAdmin: !!user.isAdmin };
+  renderNav();
+}
+
+async function signup(email, password) {
+  if (hasFirebaseConfig) {
+    await auth.createUserWithEmailAndPassword(email, password);
+    return;
+  }
+  if (password.length < 6) throw new Error("Password must be at least 6 characters.");
+  if (demo.users.some(item => item.email.toLowerCase() === email.toLowerCase())) throw new Error("That email is already registered.");
+  const user = { id: uid(), email, password, isAdmin: false, createdAt: Date.now() };
+  demo.users.push(user);
+  demo.sessionUid = user.id;
+  saveDemo();
+  currentUser = { uid: user.id, email: user.email };
+  currentUserDoc = { email: user.email, isAdmin: false };
+  renderNav();
+}
+
+async function loginWithGoogle() {
+  if (hasFirebaseConfig) {
+    const provider = new firebase.auth.GoogleAuthProvider();
+    await auth.signInWithPopup(provider);
+    return;
+  }
+  demo.sessionUid = "admin-demo";
+  saveDemo();
+  const user = demo.users.find(item => item.id === "admin-demo");
+  currentUser = { uid: user.id, email: user.email };
+  currentUserDoc = { email: user.email, isAdmin: !!user.isAdmin };
+  renderNav();
+}
+
+async function getInstitutions(all = false) {
+  if (hasFirebaseConfig) {
+    const data = await apiJson(`/institutions${all ? "?all=1" : ""}`);
+    return data.institutions || [];
+  }
+  return demo.institutions
+    .filter(item => all || item.status === "approved")
+    .sort((a, b) => a.name.localeCompare(b.name));
+}
+
+async function getInstitution(id) {
+  if (hasFirebaseConfig) {
+    try {
+      const data = await apiJson(`/institutions/${encodeURIComponent(id)}`);
+      return data.institution || null;
+    } catch {
+      return null;
+    }
+  }
+  return demo.institutions.find(item => item.id === id) || null;
+}
+
+async function getCandidates(filter = {}) {
+  if (hasFirebaseConfig) {
+    const params = new URLSearchParams();
+    if (filter.institutionId) params.set("institutionId", filter.institutionId);
+    if (filter.gender) params.set("gender", filter.gender);
+    const data = await apiJson(`/candidates${params.toString() ? `?${params}` : ""}`);
+    return data.candidates || [];
+  }
+  return demo.candidates
+    .filter(item => !filter.institutionId || item.institutionId === filter.institutionId)
+    .filter(item => !filter.gender || item.gender === filter.gender)
+    .filter(item => !filter.status || item.status === filter.status)
+    .sort((a, b) => filter.orderByCreated ? b.createdAt - a.createdAt : (b.score || b.upvotes || 0) - (a.score || a.upvotes || 0));
+}
+
+async function getVotesForUser(institutionId) {
+  if (!currentUser) return {};
+  if (hasFirebaseConfig) {
+    const data = await apiJson(`/votes?institutionId=${encodeURIComponent(institutionId)}`);
+    const votes = {};
+    (data.votes || []).forEach(vote => votes[vote.candidateId] = vote.direction);
+    return votes;
+  }
+  return demo.votes
+    .filter(item => item.voterUid === currentUser.uid && item.institutionId === institutionId)
+    .reduce((votes, item) => ({ ...votes, [item.candidateId]: item.direction }), {});
+}
+
+async function router() {
+  const main = document.getElementById("main");
+  main.innerHTML = `<div class="loading"></div>`;
+  const parts = route();
+  try {
+    if (!parts.length) return renderHome();
+    if (parts[0] === "institution" && parts[1]) return renderLeaderboard(parts[1], parts[2] || "chad");
+    if (parts[0] === "nominate") return requireAuth(renderNominate);
+    if (parts[0] === "confirm" && parts[1]) return renderConfirm(parts[1]);
+    if (parts[0] === "login") return renderLogin();
+    if (parts[0] === "signup") return renderSignup();
+    if (parts[0] === "admin") {
+      location.href = "/ranked-admin.html";
+      return;
+    }
+    main.innerHTML = `<div class="empty">Page not found.</div>`;
+  } catch (error) {
+    console.error(error);
+    main.innerHTML = `<div class="msg err">${esc(error.message)}</div>`;
+  }
+}
+
+function requireAuth(render, adminOnly = false) {
+  if (!currentUser) {
+    go("/login");
+    return;
+  }
+  if (adminOnly && !isAdmin()) {
+    document.getElementById("main").innerHTML = `<div class="empty">Admins only.</div>`;
+    return;
+  }
+  render();
+}
+
+async function renderHome() {
+  const institutions = await getInstitutions(false);
+  const main = document.getElementById("main");
+  main.innerHTML = `
+    ${!hasFirebaseConfig ? `<div class="notice">Demo mode is active. Paste your Firebase config in <b>ranked.html</b> to connect auth, Firestore, and Storage. Admin demo login: <b>admin@ranked.local</b> / <b>admin123</b>.</div>` : ""}
+    <div class="eyebrow">Pick your arena</div>
+    <h1>Institution Leaderboards</h1>
+    <p class="sub">Opt-in Chad and Stacy boards, separated by college or company. Candidates only appear after confirming their nomination.</p>
+    <div class="search"><span>⌕</span><input id="institutionSearch" type="text" placeholder="Search institutions"></div>
+    <div class="tabs">
+      <button class="tab active" data-type="all">All</button>
+      <button class="tab" data-type="college">Colleges</button>
+      <button class="tab" data-type="company">Companies</button>
+    </div>
+    <div class="institution-list" id="institutionList"></div>
+    <p class="footer-note">Adults-only MVP. No K-12 schools, comments, scraping, or non-consensual listings.</p>
+  `;
+  const draw = () => {
+    const term = document.getElementById("institutionSearch").value.trim().toLowerCase();
+    const rows = institutions.filter(item => {
+      return (homeType === "all" || item.type === homeType) && item.name.toLowerCase().includes(term);
+    });
+    document.getElementById("institutionList").innerHTML = rows.length ? rows.map(item => `
+      <a class="institution-row" href="#/institution/${item.id}/chad">
+        <span>
+          <span class="institution-name">${esc(item.name)}</span>
+          <span class="institution-meta">${item.type === "college" ? "College / University" : "Company"} - ${item.candidateCount || 0} ranked</span>
+        </span>
+        <span class="chevron">></span>
+      </a>
+    `).join("") : `<div class="empty">No institutions found. More colleges, universities, and companies are added by the team.</div>`;
+  };
+  document.getElementById("institutionSearch").oninput = draw;
+  document.querySelectorAll(".tab").forEach(tab => {
+    tab.onclick = () => {
+      document.querySelectorAll(".tab").forEach(item => item.classList.remove("active"));
+      tab.classList.add("active");
+      homeType = tab.dataset.type;
+      draw();
+    };
+  });
+  draw();
+}
+
+async function renderLeaderboard(institutionId, gender) {
+  const institution = await getInstitution(institutionId);
+  const main = document.getElementById("main");
+  if (!institution) {
+    main.innerHTML = `<div class="empty">Institution not found.</div>`;
+    return;
+  }
+  const candidates = await getCandidates({ institutionId, gender, status: "confirmed" });
+  const myVotes = await getVotesForUser(institutionId);
+  main.innerHTML = `
+    <div class="breadcrumb"><a href="#/">All institutions</a> / ${esc(institution.name)}</div>
+    <div class="leader-head">
+      <div>
+        <div class="eyebrow">${institution.type === "college" ? "College / University" : "Company"}</div>
+        <h1>${esc(institution.name)}</h1>
+      </div>
+      <div class="switch">
+        <button class="${gender === "chad" ? "active" : ""}" data-gender="chad">CHAD</button>
+        <button class="${gender === "stacy" ? "active" : ""}" data-gender="stacy">STACY</button>
+      </div>
+    </div>
+    <div class="candidate-list">
+      ${candidates.length ? candidates.map((candidate, index) => candidateRow(candidate, index, myVotes)).join("") : `<div class="empty">No confirmed ${gender} candidates here yet. <a class="link" href="#/nominate">Nominate someone</a>.</div>`}
+    </div>
+  `;
+  document.querySelectorAll("[data-gender]").forEach(button => {
+    button.onclick = () => go(`/institution/${institutionId}/${button.dataset.gender}`);
+  });
+  document.querySelectorAll("[data-vote]").forEach(button => {
+    button.onclick = () => handleVote(button.dataset.candidate, institutionId, button.dataset.vote, gender);
+  });
+}
+
+function candidateRow(candidate, index, myVotes) {
+  const rank = index + 1;
+  const direction = myVotes[candidate.id];
+  return `
+    <div class="candidate-row ${rank === 1 ? "top" : ""}">
+      <div class="rank">${rank}</div>
+      <img class="avatar" src="${candidate.photoURL || placeholder(candidate.name)}" alt="">
+      <div>
+        <div class="candidate-name">${esc(candidate.name)}</div>
+        <div class="candidate-meta">
+          <span class="score">${candidate.upvotes || 0} upvotes</span>
+          - <span class="down">${candidate.downvotes || 0} downvotes</span>
+          - raw vote rank
+        </div>
+      </div>
+      <div class="votes">
+        <button class="vote ${direction === "up" ? "on-up" : ""}" data-candidate="${candidate.id}" data-vote="up" title="Upvote">▲</button>
+        <button class="vote ${direction === "down" ? "on-down" : ""}" data-candidate="${candidate.id}" data-vote="down" title="Downvote">▼</button>
+      </div>
+    </div>
+  `;
+}
+
+async function handleVote(candidateId, institutionId, direction, gender) {
+  if (!currentUser) {
+    go("/login");
+    return;
+  }
+  if (hasFirebaseConfig) {
+    await apiJson("/votes", { method: "POST", body: { candidateId, direction } });
+  } else {
+    const candidate = demo.candidates.find(item => item.id === candidateId);
+    if (!candidate) return;
+    const existing = demo.votes.find(item => item.candidateId === candidateId && item.voterUid === currentUser.uid);
+    if (existing?.direction === direction) {
+      if (direction === "up") candidate.upvotes = Math.max(0, (candidate.upvotes || 0) - 1);
+      if (direction === "down") candidate.downvotes = Math.max(0, (candidate.downvotes || 0) - 1);
+      demo.votes = demo.votes.filter(item => item !== existing);
+    } else {
+      if (existing?.direction === "up") candidate.upvotes = Math.max(0, (candidate.upvotes || 0) - 1);
+      if (existing?.direction === "down") candidate.downvotes = Math.max(0, (candidate.downvotes || 0) - 1);
+      if (direction === "up") candidate.upvotes = (candidate.upvotes || 0) + 1;
+      if (direction === "down") candidate.downvotes = (candidate.downvotes || 0) + 1;
+      if (existing) existing.direction = direction;
+      else demo.votes.push({ id: `${candidateId}_${currentUser.uid}`, candidateId, institutionId, voterUid: currentUser.uid, direction, updatedAt: Date.now() });
+    }
+    candidate.score = candidate.upvotes || 0;
+    saveDemo();
+  }
+  await renderLeaderboard(institutionId, gender);
+  loadTicker();
+}
+
+async function renderNominate() {
+  const institutions = await getInstitutions(false);
+  selectedNominationPhoto = null;
+  document.getElementById("main").innerHTML = `
+    <div class="eyebrow">New nomination</div>
+    <h1>Nominate someone</h1>
+    <p class="sub">The candidate gets a private confirmation link. They do not appear publicly until they accept, and they can remove themselves later.</p>
+    <div class="card">
+      <div id="nominationMsg"></div>
+      <div class="form-grid">
+        <div class="field"><label>Full name</label><input id="nomName" type="text" placeholder="e.g. Alex Rivera"></div>
+        <div class="field"><label>Institution</label><select id="nomInstitution"><option value="">Select institution</option>${institutions.map(item => `<option value="${item.id}">${esc(item.name)}</option>`).join("")}</select></div>
+      </div>
+      <div class="field">
+        <label>Board</label>
+        <div class="radio-grid">
+          <button class="radio active" data-nom-gender="chad">CHAD</button>
+          <button class="radio" data-nom-gender="stacy">STACY</button>
+        </div>
+      </div>
+      <div class="field">
+        <label>Photo</label>
+        <button class="drop" id="photoDrop" type="button"><span>Click to upload nominee photo</span><span id="photoPreview"></span></button>
+        <input id="photoInput" type="file" accept="image/*" hidden>
+      </div>
+      <button class="btn" id="submitNomination" style="width:100%">Create confirmation link</button>
+    </div>
+  `;
+  let selectedGender = "chad";
+  document.querySelectorAll("[data-nom-gender]").forEach(button => {
+    button.onclick = () => {
+      document.querySelectorAll("[data-nom-gender]").forEach(item => item.classList.remove("active"));
+      button.classList.add("active");
+      selectedGender = button.dataset.nomGender;
+    };
+  });
+  document.getElementById("photoDrop").onclick = () => document.getElementById("photoInput").click();
+  document.getElementById("photoInput").onchange = async event => {
+    selectedNominationPhoto = event.target.files[0] || null;
+    if (selectedNominationPhoto) {
+      const url = await fileToDataUrl(selectedNominationPhoto);
+      document.getElementById("photoPreview").innerHTML = `<img src="${url}" alt="">`;
+    }
+  };
+  document.getElementById("submitNomination").onclick = async () => {
+    const name = document.getElementById("nomName").value.trim();
+    const institutionId = document.getElementById("nomInstitution").value;
+    const msg = document.getElementById("nominationMsg");
+    if (!name || !institutionId) {
+      msg.innerHTML = `<div class="msg err">Name and institution are required.</div>`;
+      return;
+    }
+    const button = document.getElementById("submitNomination");
+    button.disabled = true;
+    button.textContent = "Creating...";
+    try {
+      const token = uid();
+      const photoURL = await uploadPhoto(selectedNominationPhoto);
+      if (hasFirebaseConfig) {
+        const data = await apiJson("/nominations", {
+          method: "POST",
+          body: {
+          candidateName: name,
+          institutionId,
+          gender: selectedGender,
+          photoURL
+          }
+        });
+        const confirmToken = data.confirmToken;
+        const link = `${location.origin}${location.pathname}#/confirm/${confirmToken}`;
+        msg.innerHTML = `<div class="msg ok">Nomination created. Send this confirmation link to the candidate:<br><a href="${link}">${esc(link)}</a></div>`;
+        return;
+      } else {
+        const duplicate = demo.nominations.some(item => item.institutionId === institutionId && item.candidateName.toLowerCase() === name.toLowerCase() && item.status === "pending");
+        if (duplicate) throw new Error("This person already has a pending nomination at that institution.");
+        demo.nominations.push({ id: uid(), candidateName: name, institutionId, gender: selectedGender, photoURL, nominatorUid: currentUser.uid, status: "pending", confirmToken: token, createdAt: Date.now() });
+        saveDemo();
+      }
+      const link = `${location.origin}${location.pathname}#/confirm/${token}`;
+      msg.innerHTML = `<div class="msg ok">Nomination created. Send this confirmation link to the candidate:<br><a href="${link}">${esc(link)}</a></div>`;
+    } catch (error) {
+      msg.innerHTML = `<div class="msg err">${esc(error.message)}</div>`;
+    } finally {
+      button.disabled = false;
+      button.textContent = "Create confirmation link";
+    }
+  };
+}
+
+async function findNominationByToken(token) {
+  if (hasFirebaseConfig) {
+    const data = await apiJson(`/confirm/${encodeURIComponent(token)}`);
+    return data.nomination || null;
+  }
+  return demo.nominations.find(item => item.confirmToken === token) || null;
+}
+
+async function findCandidateByToken(token) {
+  if (hasFirebaseConfig) {
+    const data = await apiJson(`/confirm/${encodeURIComponent(token)}`);
+    return data.candidate || null;
+  }
+  return demo.candidates.find(item => item.confirmToken === token) || null;
+}
+
+async function renderConfirm(token) {
+  const main = document.getElementById("main");
+  const nomination = await findNominationByToken(token);
+  const candidate = await findCandidateByToken(token);
+  if (!nomination && !candidate) {
+    main.innerHTML = `<div class="empty">This confirmation link is invalid or expired.</div>`;
+    return;
+  }
+  const activeCandidate = candidate || null;
+  if (activeCandidate) {
+    main.innerHTML = `
+      <div class="eyebrow">Your listing</div>
+      <h1>${esc(activeCandidate.name)}</h1>
+      <p class="sub">You are live on the board. You can replace your photo or remove yourself at any time from this link.</p>
+      <div class="card">
+        <div id="confirmMsg"></div>
+        <img class="avatar" style="width:90px;height:90px;margin-bottom:16px" src="${activeCandidate.photoURL || placeholder(activeCandidate.name)}" alt="">
+        <div class="field">
+          <label>Replace photo</label>
+          <button class="drop" id="replaceDrop" type="button">Click to upload new photo</button>
+          <input id="replaceInput" type="file" accept="image/*" hidden>
+        </div>
+        <button class="btn btn-danger" id="optOutBtn" style="width:100%">Remove me from RANKED</button>
+      </div>
+    `;
+    document.getElementById("replaceDrop").onclick = () => document.getElementById("replaceInput").click();
+    document.getElementById("replaceInput").onchange = async event => {
+      const file = event.target.files[0];
+      if (!file) return;
+      const photoURL = await uploadPhoto(file);
+      if (hasFirebaseConfig) await apiJson(`/candidates/${encodeURIComponent(activeCandidate.id)}/photo`, { method: "PATCH", body: { photoURL } });
+      else {
+        activeCandidate.photoURL = photoURL;
+        saveDemo();
+      }
+      document.getElementById("confirmMsg").innerHTML = `<div class="msg ok">Photo updated.</div>`;
+    };
+    document.getElementById("optOutBtn").onclick = async () => {
+      if (!confirm("Remove this listing and its votes?")) return;
+      if (hasFirebaseConfig) {
+        await apiJson(`/candidates/${encodeURIComponent(activeCandidate.id)}/opt-out`, { method: "POST" });
+      } else {
+        demo.candidates = demo.candidates.filter(item => item.id !== activeCandidate.id);
+        demo.votes = demo.votes.filter(item => item.candidateId !== activeCandidate.id);
+        saveDemo();
+      }
+      main.innerHTML = `<div class="msg ok">Your listing has been removed.</div>`;
+      loadTicker();
+    };
+    return;
+  }
+
+  main.innerHTML = `
+    <div class="eyebrow">You've been nominated</div>
+    <h1>${esc(nomination.candidateName)}, confirm your listing</h1>
+    <p class="sub">Nothing goes public until you accept. After confirmation, this same link lets you change your photo or opt out.</p>
+    <div class="card">
+      <div id="confirmMsg"></div>
+      <img class="avatar" style="width:90px;height:90px;margin-bottom:16px" src="${nomination.photoURL || placeholder(nomination.candidateName)}" alt="">
+      <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px">
+        <button class="btn" id="acceptNomination">Confirm, I'm in</button>
+        <button class="btn btn-secondary" id="flagNomination">This is not me</button>
+      </div>
+    </div>
+  `;
+  document.getElementById("acceptNomination").onclick = async () => {
+    if (!currentUser) {
+      document.getElementById("confirmMsg").innerHTML = `<div class="msg err">Log in first so this listing can be tied to you.</div>`;
+      go("/login");
+      return;
+    }
+    if (hasFirebaseConfig) {
+      await apiJson(`/confirm/${encodeURIComponent(token)}`, { method: "POST" });
+    } else {
+      demo.candidates.push({ id: uid(), name: nomination.candidateName, photoURL: nomination.photoURL || null, gender: nomination.gender, institutionId: nomination.institutionId, status: "confirmed", confirmToken: token, nominatedBy: nomination.nominatorUid, confirmedUid: currentUser.uid, upvotes: 0, downvotes: 0, score: 0, createdAt: Date.now() });
+      nomination.status = "confirmed";
+      const institution = demo.institutions.find(item => item.id === nomination.institutionId);
+      if (institution) institution.candidateCount = (institution.candidateCount || 0) + 1;
+      saveDemo();
+    }
+    go(`/institution/${nomination.institutionId}/${nomination.gender}`);
+  };
+  document.getElementById("flagNomination").onclick = async () => {
+    if (hasFirebaseConfig) await apiJson(`/confirm/${encodeURIComponent(token)}/flag`, { method: "POST", body: { reason: "Candidate says this is not them" } });
+    else {
+      nomination.status = "flagged";
+      saveDemo();
+    }
+    document.getElementById("confirmMsg").innerHTML = `<div class="msg ok">Flagged for admin review. This nomination will not go live.</div>`;
+  };
+}
+
+function renderLogin() {
+  document.getElementById("main").innerHTML = `
+    <div class="eyebrow">Welcome back</div>
+    <h1>Log in</h1>
+    <div class="card">
+      <div id="loginMsg"></div>
+      <button class="btn btn-secondary" id="googleBtn" style="width:100%;margin-bottom:14px">Continue with Google</button>
+      <div class="field"><label>Email</label><input id="loginEmail" type="email" value="${hasFirebaseConfig ? "" : "admin@ranked.local"}"></div>
+      <div class="field"><label>Password</label><input id="loginPassword" type="password" value="${hasFirebaseConfig ? "" : "admin123"}"></div>
+      <button class="btn" id="loginBtn" style="width:100%">Log in</button>
+      <p class="sub" style="margin:14px 0 0">No account? <a class="link" href="#/signup">Sign up</a></p>
+    </div>
+  `;
+  document.getElementById("googleBtn").onclick = async () => {
+    try {
+      await loginWithGoogle();
+      go("/");
+    } catch (error) {
+      document.getElementById("loginMsg").innerHTML = `<div class="msg err">${esc(error.message)}</div>`;
+    }
+  };
+  document.getElementById("loginBtn").onclick = async () => {
+    try {
+      await login(document.getElementById("loginEmail").value.trim(), document.getElementById("loginPassword").value);
+      go("/");
+    } catch (error) {
+      document.getElementById("loginMsg").innerHTML = `<div class="msg err">${esc(error.message)}</div>`;
+    }
+  };
+}
+
+function renderSignup() {
+  document.getElementById("main").innerHTML = `
+    <div class="eyebrow">Join</div>
+    <h1>Create account</h1>
+    <div class="card">
+      <div id="signupMsg"></div>
+      <button class="btn btn-secondary" id="googleBtn" style="width:100%;margin-bottom:14px">Continue with Google</button>
+      <div class="field"><label>Email</label><input id="signupEmail" type="email"></div>
+      <div class="field"><label>Password</label><input id="signupPassword" type="password" placeholder="6+ characters"></div>
+      <button class="btn" id="signupBtn" style="width:100%">Sign up</button>
+      <p class="sub" style="margin:14px 0 0">Already have an account? <a class="link" href="#/login">Log in</a></p>
+    </div>
+  `;
+  document.getElementById("googleBtn").onclick = async () => {
+    try {
+      await loginWithGoogle();
+      go("/");
+    } catch (error) {
+      document.getElementById("signupMsg").innerHTML = `<div class="msg err">${esc(error.message)}</div>`;
+    }
+  };
+  document.getElementById("signupBtn").onclick = async () => {
+    try {
+      await signup(document.getElementById("signupEmail").value.trim(), document.getElementById("signupPassword").value);
+      go("/");
+    } catch (error) {
+      document.getElementById("signupMsg").innerHTML = `<div class="msg err">${esc(error.message)}</div>`;
+    }
+  };
+}
+
+async function loadTicker() {
+  const candidates = await getCandidates({ status: "confirmed" });
+  const top = candidates.sort((a, b) => (b.score || b.upvotes || 0) - (a.score || a.upvotes || 0)).slice(0, 10);
+  const track = document.getElementById("tickerTrack");
+  if (!top.length) {
+    track.innerHTML = `<span class="ticker-item">no confirmed rankings yet</span>`;
+    return;
+  }
+  const items = top.map((candidate, index) => `<span class="ticker-item"><span class="ticker-rank">#${index + 1}</span><b>${esc(candidate.name)}</b><span class="ticker-score">${candidate.upvotes || 0} UP</span></span>`).join("");
+  track.innerHTML = items + items;
+}
+
+window.addEventListener("hashchange", router);
+boot();
+</script>
+</body>
+</html>
