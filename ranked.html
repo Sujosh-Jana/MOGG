@@ -1113,7 +1113,7 @@ async function handleProfileVote(candidate, direction) {
       if (existing) existing.direction = direction;
       else demo.votes.push({ id: `${candidate.id}_${currentUser.uid}`, candidateId: candidate.id, institutionId: candidate.institutionId, voterUid: currentUser.uid, direction, updatedAt: Date.now() });
     }
-    candidate.score = candidate.upvotes || 0;
+    candidate.score = (candidate.upvotes || 0) - (candidate.downvotes || 0);
     saveDemo();
     upBtn.textContent = `▲ ${candidate.upvotes || 0}`;
     downBtn.textContent = `▼ ${candidate.downvotes || 0}`;
@@ -1328,7 +1328,7 @@ async function handleVote(candidateId, institutionId, direction, gender) {
       if (existing) existing.direction = direction;
       else demo.votes.push({ id: `${candidateId}_${currentUser.uid}`, candidateId, institutionId, voterUid: currentUser.uid, direction, updatedAt: Date.now() });
     }
-    candidate.score = candidate.upvotes || 0;
+    candidate.score = (candidate.upvotes || 0) - (candidate.downvotes || 0);
     saveDemo();
     await renderLeaderboard(institutionId, gender);
     loadTicker();
@@ -1358,7 +1358,7 @@ async function handleVote(candidateId, institutionId, direction, gender) {
     if (direction === "down") candidate.downvotes = (candidate.downvotes || 0) + 1;
     leaderboardState.myVotes[candidateId] = direction;
   }
-  candidate.score = candidate.upvotes || 0;
+  candidate.score = (candidate.upvotes || 0) - (candidate.downvotes || 0);
   leaderboardState.candidates.sort((a, b) => (b.score || b.upvotes || 0) - (a.score || a.upvotes || 0));
   renderCandidateList();
 

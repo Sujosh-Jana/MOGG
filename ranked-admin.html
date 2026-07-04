@@ -431,7 +431,33 @@ async function renderOverview() {
       <div class="card"><h2>Pending confirmations</h2>${miniNominationTable(pending)}</div>
       <div class="card"><h2>Flagged nominations</h2>${miniNominationTable(flagged)}</div>
     </div>
+    <div class="card">
+      <h2>Maintenance</h2>
+      <p class="sub">Ranking now uses net score (upvotes minus downvotes). Candidates who existed before this change still have their old upvotes-only score stored until they get a new vote - run this once to fix them all immediately.</p>
+      <div id="recalcMsg"></div>
+      <button class="btn secondary" id="recalcScoresBtn">Recalculate all scores</button>
+    </div>
   `;
+  document.getElementById("recalcScoresBtn").onclick = async () => {
+    const button = document.getElementById("recalcScoresBtn");
+    button.disabled = true;
+    button.textContent = "Recalculating...";
+    try {
+      if (useFirebase) {
+        const result = await apiJson("/admin/recalculate-scores", { method: "POST" });
+        document.getElementById("recalcMsg").innerHTML = `<div class="msg ok">Updated ${result.updated} candidate(s).</div>`;
+      } else {
+        demo.candidates.forEach(c => { c.score = (c.upvotes || 0) - (c.downvotes || 0); });
+        saveDemo();
+        document.getElementById("recalcMsg").innerHTML = `<div class="msg ok">Demo candidates recalculated.</div>`;
+      }
+    } catch (error) {
+      document.getElementById("recalcMsg").innerHTML = `<div class="msg err">${esc(error.message)}</div>`;
+    } finally {
+      button.disabled = false;
+      button.textContent = "Recalculate all scores";
+    }
+  };
 }
 
 function miniNominationTable(rows) {

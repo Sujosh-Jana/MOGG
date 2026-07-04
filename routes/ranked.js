@@ -134,7 +134,7 @@ router.post('/votes', authMiddleware, voteLimiter, async (req, res, next) => {
       tx.update(candidateRef, {
         upvotes,
         downvotes,
-        score: upvotes,
+        score: upvotes - downvotes,
         updatedAt: FieldValue.serverTimestamp(),
       });
       tx.create(db.collection('ranked_audit').doc(), buildAudit('vote_updated', req.user, {
@@ -142,7 +142,7 @@ router.post('/votes', authMiddleware, voteLimiter, async (req, res, next) => {
         direction: activeDirection || 'retracted',
       }));
 
-      return { candidateId, direction: activeDirection, upvotes, downvotes, score: upvotes };
+      return { candidateId, direction: activeDirection, upvotes, downvotes, score: upvotes - downvotes };
     });
 
     res.json(result);
@@ -416,6 +416,35 @@ router.get('/admin/overview', async (req, res, next) => {
         users: users.size,
       },
     });
+  } catch (err) {
+    next(err);
+  }
+});
+
+router.post('/admin/recalculate-scores', async (req, res, next) => {
+  try {
+    const snap = await db.collection('candidates').get();
+    const batches = [];
+    let batch = db.batch();
+    let count = 0;
+    snap.docs.forEach((doc) => {
+      const data = doc.data() || {};
+      const upvotes = Number(data.upvotes || 0);
+      const downvotes = Number(data.downvotes || 0);
+      const correctScore = upvotes - downvotes;
+      if (data.score !== correctScore) {
+        batch.update(doc.ref, { score: correctScore });
+        count += 1;
+        if (count % 400 === 0) {
+          batches.push(batch.commit());
+          batch = db.batch();
+        }
+      }
+    });
+    batches.push(batch.commit());
+    await Promise.all(batches);
+    await db.collection('ranked_audit').add(buildAudit('scores_recalculated', req.user, { updated: count }));
+    res.json({ ok: true, updated: count });
   } catch (err) {
     next(err);
   }
