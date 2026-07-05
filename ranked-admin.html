@@ -433,9 +433,9 @@ async function renderOverview() {
     </div>
     <div class="card">
       <h2>Maintenance</h2>
-      <p class="sub">Ranking now uses net score (upvotes minus downvotes). Candidates who existed before this change still have their old upvotes-only score stored until they get a new vote - run this once to fix them all immediately.</p>
+      <p class="sub">Ranking uses net score (upvotes minus downvotes), and each institution's "ranked" count only includes confirmed candidates. Run this once to fix any stale scores or counts left over from before these existed.</p>
       <div id="recalcMsg"></div>
-      <button class="btn secondary" id="recalcScoresBtn">Recalculate all scores</button>
+      <button class="btn secondary" id="recalcScoresBtn">Recalculate scores &amp; counts</button>
     </div>
   `;
   document.getElementById("recalcScoresBtn").onclick = async () => {
@@ -445,17 +445,20 @@ async function renderOverview() {
     try {
       if (useFirebase) {
         const result = await apiJson("/admin/recalculate-scores", { method: "POST" });
-        document.getElementById("recalcMsg").innerHTML = `<div class="msg ok">Updated ${result.updated} candidate(s).</div>`;
+        document.getElementById("recalcMsg").innerHTML = `<div class="msg ok">Updated ${result.updated} candidate score(s), fixed ${result.institutionsFixed} institution count(s).</div>`;
       } else {
         demo.candidates.forEach(c => { c.score = (c.upvotes || 0) - (c.downvotes || 0); });
+        demo.institutions.forEach(inst => {
+          inst.candidateCount = demo.candidates.filter(c => c.institutionId === inst.id && c.status === "confirmed").length;
+        });
         saveDemo();
-        document.getElementById("recalcMsg").innerHTML = `<div class="msg ok">Demo candidates recalculated.</div>`;
+        document.getElementById("recalcMsg").innerHTML = `<div class="msg ok">Demo data recalculated.</div>`;
       }
     } catch (error) {
       document.getElementById("recalcMsg").innerHTML = `<div class="msg err">${esc(error.message)}</div>`;
     } finally {
       button.disabled = false;
-      button.textContent = "Recalculate all scores";
+      button.textContent = "Recalculate scores & counts";
     }
   };
 }
@@ -500,24 +503,50 @@ async function renderInstitutions() {
     }
   };
   document.querySelectorAll("[data-hide-inst]").forEach(button => button.onclick = async () => {
-    if (useFirebase) await apiJson(`/admin/institutions/${button.dataset.hideInst}`, { method: "PATCH", body: { status: "hidden" } });
-    else {
-      const item = demo.institutions.find(inst => inst.id === button.dataset.hideInst);
-      if (item) item.status = "hidden";
-      audit("institution_hidden", { institutionId: button.dataset.hideInst });
-      saveDemo();
+    const row = button.closest("tr");
+    const badge = row.querySelector(".badge");
+    const previousText = badge.textContent;
+    const previousClass = badge.className;
+    badge.textContent = "hidden";
+    badge.className = "badge hidden";
+    button.disabled = true;
+    try {
+      if (useFirebase) {
+        await apiJson(`/admin/institutions/${button.dataset.hideInst}`, { method: "PATCH", body: { status: "hidden" } });
+      } else {
+        const item = demo.institutions.find(inst => inst.id === button.dataset.hideInst);
+        if (item) item.status = "hidden";
+        audit("institution_hidden", { institutionId: button.dataset.hideInst });
+        saveDemo();
+      }
+    } catch (error) {
+      badge.textContent = previousText;
+      badge.className = previousClass;
+      button.disabled = false;
+      document.getElementById("institutionMsg").innerHTML = `<div class="msg err">${esc(error.message)}</div>`;
     }
-    renderInstitutions();
   });
   document.querySelectorAll("[data-delete-inst]").forEach(button => button.onclick = async () => {
-    if (!confirm("Delete this institution? Candidates must be removed first in launch mode.")) return;
-    if (useFirebase) await apiJson(`/admin/institutions/${button.dataset.deleteInst}`, { method: "DELETE" });
-    else {
-      demo.institutions = demo.institutions.filter(inst => inst.id !== button.dataset.deleteInst);
-      audit("institution_deleted", { institutionId: button.dataset.deleteInst });
-      saveDemo();
+    if (!confirm("Delete this institution? It must have zero confirmed candidates.")) return;
+    const row = button.closest("tr");
+    row.style.opacity = "0.4";
+    button.disabled = true;
+    button.textContent = "Deleting...";
+    try {
+      if (useFirebase) {
+        await apiJson(`/admin/institutions/${button.dataset.deleteInst}`, { method: "DELETE" });
+      } else {
+        demo.institutions = demo.institutions.filter(inst => inst.id !== button.dataset.deleteInst);
+        audit("institution_deleted", { institutionId: button.dataset.deleteInst });
+        saveDemo();
+      }
+      row.remove();
+    } catch (error) {
+      row.style.opacity = "1";
+      button.disabled = false;
+      button.textContent = "Delete";
+      document.getElementById("institutionMsg").innerHTML = `<div class="msg err">${esc(error.message)}</div>`;
     }
-    renderInstitutions();
   });
 }
 
@@ -590,15 +619,32 @@ async function renderCandidates() {
   };
   document.querySelectorAll("[data-remove-candidate]").forEach(button => button.onclick = async () => {
     if (!confirm("Remove this candidate from public rankings?")) return;
-    if (useFirebase) await apiJson(`/admin/candidates/${button.dataset.removeCandidate}`, { method: "DELETE" });
-    else {
-      const candidate = demo.candidates.find(item => item.id === button.dataset.removeCandidate);
-      if (candidate) candidate.status = "removed_by_admin";
-      demo.votes = demo.votes.filter(vote => vote.candidateId !== button.dataset.removeCandidate);
-      audit("candidate_admin_removed", { candidateId: button.dataset.removeCandidate });
-      saveDemo();
+    const row = button.closest("tr");
+    const id = button.dataset.removeCandidate;
+    row.style.opacity = "0.4";
+    button.disabled = true;
+    button.textContent = "Removing...";
+    try {
+      if (useFirebase) {
+        await apiJson(`/admin/candidates/${id}`, { method: "DELETE" });
+      } else {
+        const candidate = demo.candidates.find(item => item.id === id);
+        if (candidate) {
+          candidate.status = "removed_by_admin";
+          const institution = demo.institutions.find(inst => inst.id === candidate.institutionId);
+          if (institution) institution.candidateCount = Math.max(0, (institution.candidateCount || 0) - 1);
+        }
+        demo.votes = demo.votes.filter(vote => vote.candidateId !== id);
+        audit("candidate_admin_removed", { candidateId: id });
+        saveDemo();
+      }
+      row.remove();
+    } catch (error) {
+      row.style.opacity = "1";
+      button.disabled = false;
+      button.textContent = "Remove";
+      document.getElementById("candidateMsg").innerHTML = `<div class="msg err">${esc(error.message)}</div>`;
     }
-    renderCandidates();
   });
 }
 

@@ -386,6 +386,11 @@ router.post('/candidates/:id/opt-out', authMiddleware, async (req, res, next) =>
       optedOutAt: FieldValue.serverTimestamp(),
       updatedAt: FieldValue.serverTimestamp(),
     });
+    if (candidate.institutionId) {
+      batch.update(db.collection('institutions').doc(candidate.institutionId), {
+        candidateCount: FieldValue.increment(-1),
+      });
+    }
     const votes = await db.collection('votes').where('candidateId', '==', candidate.id).get();
     votes.docs.forEach((doc) => batch.delete(doc.ref));
     batch.create(db.collection('ranked_audit').doc(), buildAudit('candidate_opted_out', req.user, { candidateId: candidate.id }));
@@ -426,7 +431,9 @@ router.post('/admin/recalculate-scores', async (req, res, next) => {
     const snap = await db.collection('candidates').get();
     const batches = [];
     let batch = db.batch();
-    let count = 0;
+    let opCount = 0;
+    const confirmedCountByInstitution = {};
+
     snap.docs.forEach((doc) => {
       const data = doc.data() || {};
       const upvotes = Number(data.upvotes || 0);
@@ -434,17 +441,36 @@ router.post('/admin/recalculate-scores', async (req, res, next) => {
       const correctScore = upvotes - downvotes;
       if (data.score !== correctScore) {
         batch.update(doc.ref, { score: correctScore });
-        count += 1;
-        if (count % 400 === 0) {
+        opCount += 1;
+        if (opCount % 400 === 0) {
+          batches.push(batch.commit());
+          batch = db.batch();
+        }
+      }
+      if (data.status === 'confirmed' && data.institutionId) {
+        confirmedCountByInstitution[data.institutionId] = (confirmedCountByInstitution[data.institutionId] || 0) + 1;
+      }
+    });
+
+    const institutionsSnap = await db.collection('institutions').get();
+    let institutionsFixed = 0;
+    institutionsSnap.docs.forEach((doc) => {
+      const correctCount = confirmedCountByInstitution[doc.id] || 0;
+      if ((doc.data().candidateCount || 0) !== correctCount) {
+        batch.update(doc.ref, { candidateCount: correctCount });
+        institutionsFixed += 1;
+        opCount += 1;
+        if (opCount % 400 === 0) {
           batches.push(batch.commit());
           batch = db.batch();
         }
       }
     });
+
     batches.push(batch.commit());
     await Promise.all(batches);
-    await db.collection('ranked_audit').add(buildAudit('scores_recalculated', req.user, { updated: count }));
-    res.json({ ok: true, updated: count });
+    await db.collection('ranked_audit').add(buildAudit('scores_recalculated', req.user, { candidatesUpdated: opCount, institutionsFixed }));
+    res.json({ ok: true, updated: opCount, institutionsFixed });
   } catch (err) {
     next(err);
   }
@@ -501,7 +527,11 @@ router.patch('/admin/institutions/:id', async (req, res, next) => {
 router.delete('/admin/institutions/:id', async (req, res, next) => {
   try {
     const id = String(req.params.id);
-    const candidates = await db.collection('candidates').where('institutionId', '==', id).limit(1).get();
+    const candidates = await db.collection('candidates')
+      .where('institutionId', '==', id)
+      .where('status', '==', 'confirmed')
+      .limit(1)
+      .get();
     if (!candidates.empty) {
       return res.status(409).json({ error: 'Remove or opt out candidates before deleting this institution.' });
     }
@@ -594,8 +624,14 @@ router.delete('/admin/candidates/:id', async (req, res, next) => {
     const ref = db.collection('candidates').doc(id);
     const snap = await ref.get();
     if (!snap.exists) return res.status(404).json({ error: 'Candidate not found.' });
+    const candidateData = snap.data() || {};
     const batch = db.batch();
     batch.update(ref, { status: 'removed_by_admin', updatedAt: FieldValue.serverTimestamp() });
+    if (candidateData.institutionId) {
+      batch.update(db.collection('institutions').doc(candidateData.institutionId), {
+        candidateCount: FieldValue.increment(-1),
+      });
+    }
     const votes = await db.collection('votes').where('candidateId', '==', id).get();
     votes.docs.forEach((doc) => batch.delete(doc.ref));
     batch.create(db.collection('ranked_audit').doc(), buildAudit('candidate_admin_removed', req.user, { candidateId: id }));
