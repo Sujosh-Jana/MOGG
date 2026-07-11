@@ -463,9 +463,16 @@ async function renderOverview() {
   };
 }
 
+function nominationTarget(row) {
+  if (row.targetHandle) return `@${esc(row.targetHandle)}`;
+  if (row.status === "pending_invite") return `<span class="badge pending">invite pending</span>`;
+  if (row.targetUid) return "linked account";
+  return "-";
+}
+
 function miniNominationTable(rows) {
   if (!rows.length) return `<div class="empty">Nothing in this queue.</div>`;
-  return `<div class="table-wrap"><table><tr><th>Name</th><th>Board</th><th>Institution</th><th>Link</th></tr>${rows.slice(0, 8).map(row => `<tr><td>${esc(row.candidateName)}</td><td>${esc(row.gender)}</td><td>${esc(row.institutionName || row.institutionId)}</td><td><a class="link" href="/ranked.html#/confirm/${row.confirmToken}">open</a></td></tr>`).join("")}</table></div>`;
+  return `<div class="table-wrap"><table><tr><th>Name</th><th>Board</th><th>Institution</th><th>Target</th></tr>${rows.slice(0, 8).map(row => `<tr><td>${esc(row.candidateName)}</td><td>${esc(row.gender)}</td><td>${esc(row.institutionName || row.institutionId)}</td><td>${nominationTarget(row)}</td></tr>`).join("")}</table></div>`;
 }
 
 async function renderInstitutions() {
@@ -551,12 +558,12 @@ async function renderInstitutions() {
 }
 
 async function renderNominations() {
-  setHeader("Nominations", "Moderate consent links before they become public listings.");
+  setHeader("Nominations", "Moderate requests before they become public listings.");
   const rows = await fetchNominations("");
   document.getElementById("view").innerHTML = `
     <div class="table-wrap"><table>
-      <tr><th>Name</th><th>Board</th><th>Institution</th><th>Status</th><th>Confirm link</th><th>Actions</th></tr>
-      ${rows.map(row => `<tr><td>${esc(row.candidateName)}</td><td>${esc(row.gender)}</td><td>${esc(row.institutionName || row.institutionId)}</td><td><span class="badge ${row.status}">${esc(row.status)}</span></td><td><a class="link" href="/ranked.html#/confirm/${row.confirmToken}">open</a></td><td>${["pending", "flagged"].includes(row.status) ? `<button class="btn danger" data-reject-nom="${row.id}">Reject</button>` : ""}</td></tr>`).join("") || `<tr><td colspan="6">No nominations yet.</td></tr>`}
+      <tr><th>Name</th><th>Board</th><th>Institution</th><th>Status</th><th>Target</th><th>Actions</th></tr>
+      ${rows.map(row => `<tr><td>${esc(row.candidateName)}</td><td>${esc(row.gender)}</td><td>${esc(row.institutionName || row.institutionId)}</td><td><span class="badge ${row.status}">${esc(row.status)}</span></td><td>${nominationTarget(row)}</td><td>${["pending", "pending_invite", "flagged"].includes(row.status) ? `<button class="btn danger" data-reject-nom="${row.id}">Reject</button>` : ""}</td></tr>`).join("") || `<tr><td colspan="6">No nominations yet.</td></tr>`}
     </table></div>
   `;
   document.querySelectorAll("[data-reject-nom]").forEach(button => button.onclick = async () => {

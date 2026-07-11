@@ -27,9 +27,18 @@ const adminLimiter = createRateLimiter({
   keyGenerator: (req) => req.user?.uid || req.ip,
 });
 
+const handleLimiter = createRateLimiter({
+  name: 'ranked handle claim',
+  windowMs: 60_000,
+  max: 10,
+  keyGenerator: (req) => req.user?.uid || req.ip,
+});
+
 const ADULT_INSTITUTION_TYPES = new Set(['college', 'company']);
 const SCHOOL_BLOCKLIST = /\b(k-?12|school|public school|high school|middle school|primary|secondary|academy)\b/i;
 const SOCIAL_FIELDS = ['instagram', 'tiktok', 'twitter', 'youtube', 'snapchat', 'website'];
+const HANDLE_RE = /^[a-z0-9_]{3,20}$/;
+const RESERVED_HANDLES = new Set(['admin', 'ranked', 'moggoff', 'support', 'help', 'api', 'root', 'me', 'null', 'undefined']);
 
 router.get('/institutions', async (req, res, next) => {
   try {
@@ -97,52 +106,96 @@ router.post('/votes', authMiddleware, voteLimiter, async (req, res, next) => {
       return res.status(400).json({ error: 'candidateId and direction are required.' });
     }
 
+    // Vote model: a person may hold at most ONE upvote and ONE downvote per
+    // institution (across every candidate listed there, on either board).
+    // Each slot is a single doc keyed by institution+voter+direction whose
+    // `candidateId` field points at whoever currently holds that slot, so
+    // casting a new vote in a direction automatically MOVES it off the old
+    // candidate. A person can never hold both directions on the same
+    // candidate - claiming one direction on someone auto-clears the other.
+    const oppositeDirection = direction === 'up' ? 'down' : 'up';
+
     const result = await db.runTransaction(async (tx) => {
       const candidateRef = db.collection('candidates').doc(candidateId);
-      const voteRef = db.collection('votes').doc(`${candidateId}_${req.user.uid}`);
-      const [candidateSnap, voteSnap] = await Promise.all([tx.get(candidateRef), tx.get(voteRef)]);
+      const candidateSnap = await tx.get(candidateRef);
       if (!candidateSnap.exists || candidateSnap.data()?.status !== 'confirmed') {
         throw Object.assign(new Error('Candidate not found'), { status: 404 });
       }
+      const institutionId = candidateSnap.data().institutionId;
 
-      const current = candidateSnap.data() || {};
-      let upvotes = Number(current.upvotes || 0);
-      let downvotes = Number(current.downvotes || 0);
-      const previous = voteSnap.exists ? voteSnap.data()?.direction : null;
+      const sameSlotRef = db.collection('votes').doc(`${institutionId}_${req.user.uid}_${direction}`);
+      const oppositeSlotRef = db.collection('votes').doc(`${institutionId}_${req.user.uid}_${oppositeDirection}`);
+      const [sameSlotSnap, oppositeSlotSnap] = await Promise.all([tx.get(sameSlotRef), tx.get(oppositeSlotRef)]);
+      const sameSlot = sameSlotSnap.exists ? sameSlotSnap.data() : null;
+      const oppositeSlot = oppositeSlotSnap.exists ? oppositeSlotSnap.data() : null;
+
+      // Collect every OTHER candidate doc we might need to adjust, reading
+      // them all before any writes (Firestore transactions require reads
+      // before writes).
+      const candidates = new Map([[candidateId, { ref: candidateRef, data: { ...candidateSnap.data() } }]]);
+      const otherIdsToLoad = new Set();
+      if (sameSlot?.candidateId && sameSlot.candidateId !== candidateId) otherIdsToLoad.add(sameSlot.candidateId);
+      for (const otherId of otherIdsToLoad) {
+        const ref = db.collection('candidates').doc(otherId);
+        const snap = await tx.get(ref);
+        if (snap.exists) candidates.set(otherId, { ref, data: { ...snap.data() } });
+      }
+
+      const bump = (id, dir, delta) => {
+        const entry = candidates.get(id);
+        if (!entry) return;
+        const key = dir === 'up' ? 'upvotes' : 'downvotes';
+        entry.data[key] = Math.max(0, Number(entry.data[key] || 0) + delta);
+      };
+
       let activeDirection = direction;
 
-      if (previous === direction) {
-        if (direction === 'up') upvotes = Math.max(0, upvotes - 1);
-        if (direction === 'down') downvotes = Math.max(0, downvotes - 1);
-        tx.delete(voteRef);
+      if (sameSlot && sameSlot.candidateId === candidateId) {
+        // Clicking the same direction they already have on this candidate: retract it.
+        bump(candidateId, direction, -1);
+        tx.delete(sameSlotRef);
         activeDirection = null;
       } else {
-        if (previous === 'up') upvotes = Math.max(0, upvotes - 1);
-        if (previous === 'down') downvotes = Math.max(0, downvotes - 1);
-        if (direction === 'up') upvotes += 1;
-        if (direction === 'down') downvotes += 1;
-        tx.set(voteRef, {
-          candidateId,
-          institutionId: current.institutionId,
+        // Moving (or newly casting) this direction onto `candidateId`.
+        if (sameSlot?.candidateId) bump(sameSlot.candidateId, direction, -1);
+        // Can't hold both directions on the same person - clear the opposite if it's here.
+        if (oppositeSlot?.candidateId === candidateId) {
+          bump(candidateId, oppositeDirection, -1);
+          tx.delete(oppositeSlotRef);
+        }
+        bump(candidateId, direction, 1);
+        tx.set(sameSlotRef, {
+          institutionId,
           voterUid: req.user.uid,
           voterEmail: req.user.email || '',
           direction,
+          candidateId,
           updatedAt: FieldValue.serverTimestamp(),
         });
       }
 
-      tx.update(candidateRef, {
-        upvotes,
-        downvotes,
-        score: upvotes - downvotes,
-        updatedAt: FieldValue.serverTimestamp(),
-      });
+      for (const { ref, data } of candidates.values()) {
+        tx.update(ref, {
+          upvotes: data.upvotes,
+          downvotes: data.downvotes,
+          score: data.upvotes - data.downvotes,
+          updatedAt: FieldValue.serverTimestamp(),
+        });
+      }
+
       tx.create(db.collection('ranked_audit').doc(), buildAudit('vote_updated', req.user, {
         candidateId,
         direction: activeDirection || 'retracted',
       }));
 
-      return { candidateId, direction: activeDirection, upvotes, downvotes, score: upvotes - downvotes };
+      const finalCandidate = candidates.get(candidateId).data;
+      return {
+        candidateId,
+        direction: activeDirection,
+        upvotes: finalCandidate.upvotes,
+        downvotes: finalCandidate.downvotes,
+        score: finalCandidate.upvotes - finalCandidate.downvotes,
+      };
     });
 
     res.json(result);
@@ -171,23 +224,66 @@ router.post('/nominations', authMiddleware, nominationLimiter, async (req, res, 
     const institutionId = String(req.body?.institutionId || '').trim();
     const gender = normalizeGender(req.body?.gender);
     const photoURL = cleanUrl(req.body?.photoURL);
+    const inviteMode = Boolean(req.body?.inviteMode);
+    const targetHandleInput = normalizeHandle(req.body?.targetHandle);
+
     if (!candidateName || !institutionId || !gender) {
       return res.status(400).json({ error: 'candidateName, institutionId, and gender are required.' });
+    }
+    if (!inviteMode && !targetHandleInput) {
+      return res.status(400).json({ error: "Enter the nominee's handle, or check \"they don't have an account yet\"." });
     }
 
     const institution = await getApprovedAdultInstitution(institutionId);
     const normalizedName = normalizeName(candidateName);
-    const duplicate = await db.collection('nominations')
-      .where('institutionId', '==', institutionId)
-      .where('candidateNameNormalized', '==', normalizedName)
-      .where('status', '==', 'pending')
-      .limit(1)
-      .get();
-    if (!duplicate.empty) {
-      return res.status(409).json({ error: 'This person already has a pending nomination at that institution.' });
+
+    let targetUid = null;
+    let targetHandle = null;
+
+    if (inviteMode) {
+      const duplicateInvite = await db.collection('nominations')
+        .where('institutionId', '==', institutionId)
+        .where('candidateNameNormalized', '==', normalizedName)
+        .where('status', '==', 'pending_invite')
+        .limit(1)
+        .get();
+      if (!duplicateInvite.empty) {
+        return res.status(409).json({ error: 'An invite for this name is already pending at that institution.' });
+      }
+    } else {
+      const handleSnap = await db.collection('handles').doc(targetHandleInput).get();
+      if (!handleSnap.exists) {
+        return res.status(404).json({
+          error: `No account found with the handle @${targetHandleInput}. If they don't have an account yet, use the "they don't have an account" option instead.`,
+        });
+      }
+      targetUid = handleSnap.data().uid;
+      targetHandle = targetHandleInput;
+
+      const alreadyListed = await db.collection('candidates')
+        .where('institutionId', '==', institutionId)
+        .where('gender', '==', gender)
+        .where('confirmedUid', '==', targetUid)
+        .where('status', '==', 'confirmed')
+        .limit(1)
+        .get();
+      if (!alreadyListed.empty) {
+        return res.status(409).json({ error: 'This person is already ranked at that institution.' });
+      }
+
+      const pendingForTarget = await db.collection('nominations')
+        .where('institutionId', '==', institutionId)
+        .where('targetUid', '==', targetUid)
+        .where('status', '==', 'pending')
+        .limit(1)
+        .get();
+      if (!pendingForTarget.empty) {
+        return res.status(409).json({ error: 'This person already has a pending nomination request at that institution.' });
+      }
     }
 
     const confirmToken = uuidv4().replace(/-/g, '');
+    const inviteToken = inviteMode ? uuidv4().replace(/-/g, '') : null;
     const doc = {
       candidateName,
       candidateNameNormalized: normalizedName,
@@ -197,7 +293,10 @@ router.post('/nominations', authMiddleware, nominationLimiter, async (req, res, 
       photoURL,
       nominatorUid: req.user.uid,
       nominatorEmail: req.user.email || '',
-      status: 'pending',
+      status: inviteMode ? 'pending_invite' : 'pending',
+      targetUid,
+      targetHandle,
+      inviteToken,
       confirmToken,
       consentModel: 'candidate_must_confirm',
       createdAt: FieldValue.serverTimestamp(),
@@ -208,38 +307,90 @@ router.post('/nominations', authMiddleware, nominationLimiter, async (req, res, 
       nominationId: ref.id,
       institutionId,
       candidateName,
+      inviteMode,
     }));
 
     res.status(201).json({
       nomination: { id: ref.id, ...doc, createdAt: new Date().toISOString(), updatedAt: new Date().toISOString() },
-      confirmToken,
+      inviteToken,
     });
   } catch (err) {
     next(err);
   }
 });
 
-router.get('/confirm/:token', async (req, res, next) => {
+// ── Handles ─────────────────────────────────────────────────────────────
+router.post('/me/handle', authMiddleware, handleLimiter, async (req, res, next) => {
   try {
-    const token = String(req.params.token || '').trim();
-    const nomination = await findNominationByToken(token);
-    const candidate = await findCandidateByToken(token);
-    if (!nomination && !candidate) return res.status(404).json({ error: 'Confirmation link is invalid or expired.' });
-    res.json({ nomination, candidate });
+    const handle = normalizeHandle(req.body?.handle);
+    if (!handle) {
+      return res.status(400).json({ error: 'Handles must be 3-20 characters: letters, numbers, and underscores only.' });
+    }
+    if (RESERVED_HANDLES.has(handle)) {
+      return res.status(409).json({ error: 'That handle is reserved.' });
+    }
+
+    const userRef = db.collection('users').doc(req.user.uid);
+    const handleRef = db.collection('handles').doc(handle);
+
+    await db.runTransaction(async (tx) => {
+      const [userSnap, handleSnap] = await Promise.all([tx.get(userRef), tx.get(handleRef)]);
+      if (handleSnap.exists && handleSnap.data()?.uid !== req.user.uid) {
+        throw Object.assign(new Error('That handle is already taken.'), { status: 409 });
+      }
+      const existingHandle = userSnap.exists ? userSnap.data()?.handle : null;
+      if (existingHandle && existingHandle !== handle) {
+        tx.delete(db.collection('handles').doc(existingHandle));
+      }
+      tx.set(handleRef, { uid: req.user.uid, createdAt: FieldValue.serverTimestamp() }, { merge: true });
+      tx.set(userRef, { handle, email: req.user.email || '', updatedAt: FieldValue.serverTimestamp() }, { merge: true });
+    });
+
+    res.json({ handle });
   } catch (err) {
     next(err);
   }
 });
 
-router.post('/confirm/:token', authMiddleware, async (req, res, next) => {
+router.get('/handles/:handle', async (req, res, next) => {
   try {
-    const token = String(req.params.token || '').trim();
+    const handle = normalizeHandle(req.params.handle);
+    if (!handle) return res.status(400).json({ error: 'Invalid handle.' });
+    const snap = await db.collection('handles').doc(handle).get();
+    if (!snap.exists) return res.status(404).json({ error: 'No account with that handle.' });
+    res.json({ handle });
+  } catch (err) {
+    next(err);
+  }
+});
+
+// ── Nomination requests (inbox for the person who was nominated) ─────────
+router.get('/me/requests', authMiddleware, async (req, res, next) => {
+  try {
+    const snap = await db.collection('nominations')
+      .where('targetUid', '==', req.user.uid)
+      .where('status', '==', 'pending')
+      .orderBy('createdAt', 'desc')
+      .get();
+    res.json({ requests: snap.docs.map(serializeDoc) });
+  } catch (err) {
+    next(err);
+  }
+});
+
+router.post('/nominations/:id/confirm', authMiddleware, async (req, res, next) => {
+  try {
+    const nominationId = String(req.params.id);
     const result = await db.runTransaction(async (tx) => {
-      const nominationSnap = await queryOneInTransaction(tx, db.collection('nominations').where('confirmToken', '==', token).limit(1));
-      if (!nominationSnap || nominationSnap.data()?.status !== 'pending') {
-        throw Object.assign(new Error('This nomination cannot be confirmed.'), { status: 409 });
-      }
+      const nominationRef = db.collection('nominations').doc(nominationId);
+      const nominationSnap = await tx.get(nominationRef);
+      if (!nominationSnap.exists) throw Object.assign(new Error('Nomination not found.'), { status: 404 });
       const nomination = nominationSnap.data() || {};
+      // The one check that actually matters: only the person this nomination
+      // targets can confirm it. Nobody else - not even with a copy of a link.
+      if (nomination.status !== 'pending' || nomination.targetUid !== req.user.uid) {
+        throw Object.assign(new Error('This nomination is not yours to confirm.'), { status: 403 });
+      }
       await ensureInstitutionAllowedInTransaction(tx, nomination.institutionId);
 
       const candidateRef = db.collection('candidates').doc();
@@ -251,7 +402,7 @@ router.post('/confirm/:token', authMiddleware, async (req, res, next) => {
         institutionId: nomination.institutionId,
         institutionName: nomination.institutionName || '',
         status: 'confirmed',
-        confirmToken: token,
+        confirmToken: nomination.confirmToken || uuidv4().replace(/-/g, ''),
         nominatedBy: nomination.nominatorUid,
         confirmedUid: req.user.uid,
         confirmedEmail: req.user.email || '',
@@ -265,7 +416,7 @@ router.post('/confirm/:token', authMiddleware, async (req, res, next) => {
       };
 
       tx.set(candidateRef, candidate);
-      tx.update(nominationSnap.ref, {
+      tx.update(nominationRef, {
         status: 'confirmed',
         confirmedUid: req.user.uid,
         confirmedEmail: req.user.email || '',
@@ -277,7 +428,7 @@ router.post('/confirm/:token', authMiddleware, async (req, res, next) => {
         updatedAt: FieldValue.serverTimestamp(),
       });
       tx.create(db.collection('ranked_audit').doc(), buildAudit('nomination_confirmed', req.user, {
-        nominationId: nominationSnap.id,
+        nominationId,
         candidateId: candidateRef.id,
       }));
 
@@ -290,23 +441,73 @@ router.post('/confirm/:token', authMiddleware, async (req, res, next) => {
   }
 });
 
-router.post('/confirm/:token/flag', async (req, res, next) => {
+router.post('/nominations/:id/decline', authMiddleware, async (req, res, next) => {
   try {
-    const token = String(req.params.token || '').trim();
-    const nomination = await findNominationByToken(token, true);
-    if (!nomination || nomination.status !== 'pending') {
-      return res.status(404).json({ error: 'Pending nomination not found.' });
+    const nominationId = String(req.params.id);
+    const ref = db.collection('nominations').doc(nominationId);
+    const snap = await ref.get();
+    if (!snap.exists) return res.status(404).json({ error: 'Nomination not found.' });
+    const nomination = snap.data() || {};
+    if (nomination.status !== 'pending' || nomination.targetUid !== req.user.uid) {
+      return res.status(403).json({ error: 'This nomination is not yours to decline.' });
     }
-    await nomination.ref.update({
+    await ref.update({
       status: 'flagged',
       flagReason: String(req.body?.reason || 'Candidate says this is not them').slice(0, 240),
       updatedAt: FieldValue.serverTimestamp(),
     });
-    await db.collection('ranked_audit').add(buildAudit('nomination_flagged', { uid: 'public', email: '' }, {
-      nominationId: nomination.id,
-      reason: String(req.body?.reason || '').slice(0, 240),
-    }));
+    await db.collection('ranked_audit').add(buildAudit('nomination_flagged', req.user, { nominationId }));
     res.json({ ok: true });
+  } catch (err) {
+    next(err);
+  }
+});
+
+// ── Invite links (for nominating someone with no account yet) ────────────
+router.get('/invites/:token', async (req, res, next) => {
+  try {
+    const token = String(req.params.token || '').trim();
+    const snap = await db.collection('nominations').where('inviteToken', '==', token).limit(1).get();
+    if (snap.empty) return res.status(404).json({ error: 'Invite link is invalid or expired.' });
+    const nomination = serializeDoc(snap.docs[0]);
+    if (!['pending_invite', 'pending'].includes(nomination.status)) {
+      return res.status(409).json({ error: 'This invite has already been used or is no longer valid.' });
+    }
+    res.json({
+      preview: {
+        candidateName: nomination.candidateName,
+        institutionName: nomination.institutionName,
+        gender: nomination.gender,
+        claimed: nomination.status === 'pending',
+      },
+    });
+  } catch (err) {
+    next(err);
+  }
+});
+
+router.post('/invites/:token/claim', authMiddleware, async (req, res, next) => {
+  try {
+    const token = String(req.params.token || '').trim();
+    const result = await db.runTransaction(async (tx) => {
+      const snap = await queryOneInTransaction(tx, db.collection('nominations').where('inviteToken', '==', token).limit(1));
+      if (!snap) throw Object.assign(new Error('Invite link is invalid or expired.'), { status: 404 });
+      const nomination = snap.data() || {};
+      if (nomination.status === 'pending' && nomination.targetUid === req.user.uid) {
+        return { alreadyClaimed: true };
+      }
+      if (nomination.status !== 'pending_invite') {
+        throw Object.assign(new Error('This invite has already been used.'), { status: 409 });
+      }
+      tx.update(snap.ref, {
+        status: 'pending',
+        targetUid: req.user.uid,
+        targetEmail: req.user.email || '',
+        updatedAt: FieldValue.serverTimestamp(),
+      });
+      return { alreadyClaimed: false };
+    });
+    res.json(result);
   } catch (err) {
     next(err);
   }
@@ -660,11 +861,12 @@ async function ensureRankedUser(user) {
     const doc = {
       email: user.email || '',
       isAdmin: isEnvAdmin,
+      handle: null,
       createdAt: FieldValue.serverTimestamp(),
       updatedAt: FieldValue.serverTimestamp(),
     };
     await ref.set(doc, { merge: true });
-    return { uid: user.uid, email: user.email || '', isAdmin: doc.isAdmin };
+    return { uid: user.uid, email: user.email || '', isAdmin: doc.isAdmin, handle: null };
   }
   const data = snap.data() || {};
   const patch = {};
@@ -674,7 +876,12 @@ async function ensureRankedUser(user) {
     patch.updatedAt = FieldValue.serverTimestamp();
     await ref.set(patch, { merge: true });
   }
-  return { uid: user.uid, email: user.email || data.email || '', isAdmin: Boolean(data.isAdmin || isEnvAdmin) };
+  return {
+    uid: user.uid,
+    email: user.email || data.email || '',
+    isAdmin: Boolean(data.isAdmin || isEnvAdmin),
+    handle: data.handle || null,
+  };
 }
 
 async function requireRankedAdmin(req, res, next) {
@@ -720,18 +927,9 @@ async function getCandidateForOwnerOrAdmin(id, user) {
   return { id: snap.id, ref, ...data };
 }
 
-async function findNominationByToken(token, includeRef = false) {
-  const snap = await db.collection('nominations').where('confirmToken', '==', token).limit(1).get();
-  if (snap.empty) return null;
-  const doc = snap.docs[0];
-  const data = serializeDoc(doc);
-  return includeRef ? { ...data, ref: doc.ref } : data;
-}
-
-async function findCandidateByToken(token) {
-  const snap = await db.collection('candidates').where('confirmToken', '==', token).limit(1).get();
-  if (snap.empty) return null;
-  return serializeDoc(snap.docs[0]);
+function normalizeHandle(value) {
+  const handle = String(value || '').trim().toLowerCase().replace(/^@/, '');
+  return HANDLE_RE.test(handle) ? handle : null;
 }
 
 async function queryOneInTransaction(tx, query) {
