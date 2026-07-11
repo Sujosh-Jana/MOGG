@@ -585,7 +585,6 @@ let currentUser = null;
 let currentUserDoc = null;
 let homeType = "all";
 let selectedNominationPhoto = null;
-let pendingInviteToken = null;
 let pendingRequestCount = 0;
 
 if (hasFirebaseConfig && window.firebase) {
@@ -674,6 +673,40 @@ function applyDemoVote(candidateId, institutionId, direction) {
     else demo.votes.push({ id: uid(), candidateId, institutionId, voterUid, direction, updatedAt: Date.now() });
   }
   saveDemo();
+  const active = demo.votes.find(v => v.voterUid === voterUid && v.institutionId === institutionId && v.candidateId === candidateId);
+  return {
+    candidateId,
+    direction: active ? active.direction : null,
+    upvotes: candidate.upvotes || 0,
+    downvotes: candidate.downvotes || 0,
+    score: (candidate.upvotes || 0) - (candidate.downvotes || 0),
+  };
+}
+
+// Optimistic mirror of the backend's vote-slot logic, applied to whatever
+// candidate list + myVotes map is currently on screen, so a click feels
+// instant instead of waiting on a round trip. `bump(id, dir, delta)` should
+// adjust that candidate's counters if it's present in the visible list.
+function applyOptimisticVote(myVotes, bump, candidateId, direction) {
+  const opposite = direction === "up" ? "down" : "up";
+  const sameCandidateId = Object.keys(myVotes).find(id => myVotes[id] === direction);
+
+  if (sameCandidateId === candidateId) {
+    bump(candidateId, direction, -1);
+    delete myVotes[candidateId];
+    return null;
+  }
+  if (sameCandidateId) {
+    bump(sameCandidateId, direction, -1);
+    delete myVotes[sameCandidateId];
+  }
+  if (myVotes[candidateId] === opposite) {
+    bump(candidateId, opposite, -1);
+    delete myVotes[candidateId];
+  }
+  bump(candidateId, direction, 1);
+  myVotes[candidateId] = direction;
+  return direction;
 }
 function esc(value) {
   return String(value || "").replace(/[&<>"']/g, char => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[char]));
@@ -953,36 +986,22 @@ async function claimHandle(handle) {
   saveDemo();
 }
 
-async function createNomination({ candidateName, institutionId, gender, photoURL, inviteMode, targetHandle }) {
+async function createNomination({ candidateName, institutionId, gender, photoURL, targetHandle }) {
   if (hasFirebaseConfig) {
-    const data = await apiJson("/nominations", {
+    await apiJson("/nominations", {
       method: "POST",
-      body: { candidateName, institutionId, gender, photoURL, inviteMode, targetHandle },
+      body: { candidateName, institutionId, gender, photoURL, targetHandle },
     });
-    return { inviteToken: data.inviteToken || null };
+    return;
   }
 
   const normalizedName = candidateName.toLowerCase();
   const institution = demo.institutions.find(item => item.id === institutionId);
   const institutionName = institution ? institution.name : "";
 
-  if (inviteMode) {
-    const duplicate = demo.nominations.some(item =>
-      item.institutionId === institutionId && item.candidateNameNormalized === normalizedName && item.status === "pending_invite");
-    if (duplicate) throw new Error("An invite for this name is already pending at that institution.");
-    const inviteToken = uid();
-    demo.nominations.push({
-      id: uid(), candidateName, candidateNameNormalized: normalizedName, institutionId, institutionName, gender, photoURL,
-      nominatorUid: currentUser.uid, status: "pending_invite", targetUid: null, targetHandle: null,
-      inviteToken, confirmToken: uid(), createdAt: Date.now(),
-    });
-    saveDemo();
-    return { inviteToken };
-  }
-
   const targetUid = demo.handles[targetHandle];
   if (!targetUid) {
-    throw new Error(`No account found with the handle @${targetHandle}. If they don't have an account yet, use the "they don't have an account" option instead.`);
+    throw new Error(`No account found with the handle @${targetHandle}. They need a MOGGOFF account to be nominated.`);
   }
   const alreadyListed = demo.candidates.some(item =>
     item.institutionId === institutionId && item.gender === gender && item.confirmedUid === targetUid && item.status === "confirmed");
@@ -994,10 +1013,9 @@ async function createNomination({ candidateName, institutionId, gender, photoURL
   demo.nominations.push({
     id: uid(), candidateName, candidateNameNormalized: normalizedName, institutionId, institutionName, gender, photoURL,
     nominatorUid: currentUser.uid, status: "pending", targetUid, targetHandle,
-    inviteToken: null, confirmToken: uid(), createdAt: Date.now(),
+    confirmToken: uid(), createdAt: Date.now(),
   });
   saveDemo();
-  return { inviteToken: null };
 }
 
 async function confirmNomination(nominationId) {
@@ -1037,37 +1055,6 @@ async function declineNomination(nominationId) {
   saveDemo();
 }
 
-async function getInvitePreview(token) {
-  if (hasFirebaseConfig) {
-    const data = await apiJson(`/invites/${encodeURIComponent(token)}`);
-    return data.preview;
-  }
-  const nomination = demo.nominations.find(item => item.inviteToken === token);
-  if (!nomination || !["pending_invite", "pending"].includes(nomination.status)) {
-    throw new Error("This invite link is invalid or has already been used.");
-  }
-  return {
-    candidateName: nomination.candidateName,
-    institutionName: nomination.institutionName,
-    gender: nomination.gender,
-    claimed: nomination.status === "pending",
-  };
-}
-
-async function claimInvite(token) {
-  if (hasFirebaseConfig) {
-    await apiJson(`/invites/${encodeURIComponent(token)}/claim`, { method: "POST" });
-    return;
-  }
-  const nomination = demo.nominations.find(item => item.inviteToken === token);
-  if (!nomination) throw new Error("This invite link is invalid or has already been used.");
-  if (nomination.status === "pending" && nomination.targetUid === currentUser.uid) return;
-  if (nomination.status !== "pending_invite") throw new Error("This invite has already been used.");
-  nomination.status = "pending";
-  nomination.targetUid = currentUser.uid;
-  saveDemo();
-}
-
 async function router() {
   const main = document.getElementById("main");
   main.innerHTML = `<div class="loading"></div>`;
@@ -1076,7 +1063,6 @@ async function router() {
     // Handles are now the backbone of the nomination system, so anyone
     // logged in has to pick one before doing anything else on the site.
     if (currentUser && !currentUserDoc?.handle && parts[0] !== "handle") {
-      if (parts[0] === "join" && parts[1]) pendingInviteToken = parts[1];
       return renderChooseHandle();
     }
     if (!parts.length) return renderHome();
@@ -1084,7 +1070,6 @@ async function router() {
     if (parts[0] === "candidate" && parts[1]) return renderCandidateProfile(parts[1]);
     if (parts[0] === "nominate") return requireAuth(renderNominate);
     if (parts[0] === "requests") return requireAuth(renderRequests);
-    if (parts[0] === "join" && parts[1]) return renderJoinInvite(parts[1]);
     if (parts[0] === "handle") return requireAuth(renderChooseHandle);
     if (parts[0] === "login") return renderLogin();
     if (parts[0] === "signup") return renderSignup();
@@ -1311,23 +1296,42 @@ async function handleProfileVote(candidate, direction) {
   if (!currentUser) { go("/login"); return; }
   const upBtn = document.getElementById("profileUp");
   const downBtn = document.getElementById("profileDown");
-  upBtn.disabled = true;
-  downBtn.disabled = true;
+  const currentDirection = upBtn.classList.contains("on-up") ? "up" : (downBtn.classList.contains("on-down") ? "down" : null);
+
+  const snapshot = { upvotes: candidate.upvotes || 0, downvotes: candidate.downvotes || 0, currentDirection };
+  const paint = () => {
+    upBtn.textContent = `▲ ${candidate.upvotes || 0}`;
+    downBtn.textContent = `▼ ${candidate.downvotes || 0}`;
+  };
+
+  // Update the screen immediately - the click should feel instant.
+  const myVotes = { [candidate.id]: currentDirection };
+  const bump = (id, dir, delta) => {
+    if (id !== candidate.id) return; // only this one candidate is on screen
+    const key = dir === "up" ? "upvotes" : "downvotes";
+    candidate[key] = Math.max(0, (candidate[key] || 0) + delta);
+  };
+  const newDirection = applyOptimisticVote(myVotes, bump, candidate.id, direction);
+  paint();
+  upBtn.classList.toggle("on-up", newDirection === "up");
+  downBtn.classList.toggle("on-down", newDirection === "down");
+
   try {
-    // A vote is one of two slots (one up, one down) a person holds per
-    // institution, and casting one can move it off whichever OTHER candidate
-    // it used to be on - which might not even be the profile on screen. So
-    // rather than guess at the local math, apply it then re-render fresh.
-    if (!hasFirebaseConfig) {
-      applyDemoVote(candidate.id, candidate.institutionId, direction);
-    } else {
-      await apiJson("/votes", { method: "POST", body: { candidateId: candidate.id, direction } });
-    }
-    await renderCandidateProfile(candidate.id);
+    const result = !hasFirebaseConfig
+      ? applyDemoVote(candidate.id, candidate.institutionId, direction)
+      : await apiJson("/votes", { method: "POST", body: { candidateId: candidate.id, direction } });
+    candidate.upvotes = result.upvotes;
+    candidate.downvotes = result.downvotes;
+    paint();
+    upBtn.classList.toggle("on-up", result.direction === "up");
+    downBtn.classList.toggle("on-down", result.direction === "down");
     loadTicker();
   } catch (error) {
-    upBtn.disabled = false;
-    downBtn.disabled = false;
+    candidate.upvotes = snapshot.upvotes;
+    candidate.downvotes = snapshot.downvotes;
+    paint();
+    upBtn.classList.toggle("on-up", snapshot.currentDirection === "up");
+    downBtn.classList.toggle("on-down", snapshot.currentDirection === "down");
     showToast(error.message || "Vote didn't go through, try again.", "err");
   }
 }
@@ -1502,20 +1506,44 @@ async function handleVote(candidateId, institutionId, direction, gender) {
     go("/login");
     return;
   }
-  // A vote is one of two slots (one up, one down) a person holds per
-  // institution. Casting one can silently move it off a DIFFERENT candidate
-  // - possibly one on the other gender board, not even on screen right now -
-  // so we apply the change then reload this leaderboard from fresh state
-  // rather than hand-patch local counts.
+  if (!leaderboardState || leaderboardState.institutionId !== institutionId) return;
+  const { candidates, myVotes } = leaderboardState;
+  const candidate = candidates.find(item => item.id === candidateId);
+  if (!candidate) return;
+
+  // Snapshot so we can roll back instantly if the request fails.
+  const snapshot = { candidates: candidates.map(item => ({ ...item })), myVotes: { ...myVotes } };
+  const bump = (id, dir, delta) => {
+    const item = candidates.find(c => c.id === id);
+    if (!item) return;
+    const key = dir === "up" ? "upvotes" : "downvotes";
+    item[key] = Math.max(0, (item[key] || 0) + delta);
+    item.score = (item.upvotes || 0) - (item.downvotes || 0);
+  };
+
+  // Update the screen immediately - the click should feel instant.
+  applyOptimisticVote(myVotes, bump, candidateId, direction);
+  candidates.sort((a, b) => (b.score ?? b.upvotes ?? 0) - (a.score ?? a.upvotes ?? 0));
+  renderCandidateList();
+
   try {
-    if (!hasFirebaseConfig) {
-      applyDemoVote(candidateId, institutionId, direction);
-    } else {
-      await apiJson("/votes", { method: "POST", body: { candidateId, direction } });
-    }
-    await renderLeaderboard(institutionId, gender);
+    const result = !hasFirebaseConfig
+      ? applyDemoVote(candidateId, institutionId, direction)
+      : await apiJson("/votes", { method: "POST", body: { candidateId, direction } });
+    // Reconcile the clicked candidate with the server's authoritative numbers
+    // (covers the rare case where our optimistic guess didn't quite match).
+    candidate.upvotes = result.upvotes;
+    candidate.downvotes = result.downvotes;
+    candidate.score = result.score;
+    if (result.direction) myVotes[candidateId] = result.direction;
+    else delete myVotes[candidateId];
+    candidates.sort((a, b) => (b.score ?? b.upvotes ?? 0) - (a.score ?? a.upvotes ?? 0));
+    renderCandidateList();
     loadTicker();
   } catch (error) {
+    leaderboardState.candidates = snapshot.candidates;
+    leaderboardState.myVotes = snapshot.myVotes;
+    renderCandidateList();
     showToast(error.message || "Vote didn't go through, try again.", "err");
   }
 }
@@ -1523,19 +1551,15 @@ async function handleVote(candidateId, institutionId, direction, gender) {
 async function renderNominate() {
   const institutions = await getInstitutions(false);
   selectedNominationPhoto = null;
-  let inviteMode = false;
   document.getElementById("main").innerHTML = `
     <div class="eyebrow">New nomination</div>
     <h1>Nominate someone</h1>
-    <p class="sub">Nominate someone by their MOGGOFF handle. The request lands in their own Requests inbox and nothing goes public until they accept it themselves.</p>
+    <p class="sub">Nominate someone by their MOGGOFF handle. They need an account to be on the board - the request lands in their own Requests inbox and nothing goes public until they accept it themselves.</p>
     <div class="card">
       <div id="nominationMsg"></div>
       <div class="field">
-        <label style="display:flex;align-items:center;gap:8px;font-weight:600"><input type="checkbox" id="nomInviteToggle" style="width:auto;min-height:0"> They don't have an account yet</label>
-      </div>
-      <div class="field" id="nomHandleField">
         <label>Their handle</label>
-        <input id="nomHandle" type="text" placeholder="e.g. sujosh">
+        <input id="nomHandle" type="text" placeholder="e.g. trueadam">
       </div>
       <div class="form-grid">
         <div class="field"><label>Full name</label><input id="nomName" type="text" placeholder="e.g. Alex Rivera"></div>
@@ -1564,11 +1588,6 @@ async function renderNominate() {
       selectedGender = button.dataset.nomGender;
     };
   });
-  document.getElementById("nomInviteToggle").onchange = event => {
-    inviteMode = event.target.checked;
-    document.getElementById("nomHandleField").style.display = inviteMode ? "none" : "";
-    document.getElementById("submitNomination").textContent = inviteMode ? "Create invite link" : "Send nomination";
-  };
   document.getElementById("photoDrop").onclick = () => document.getElementById("photoInput").click();
   document.getElementById("photoInput").onchange = async event => {
     selectedNominationPhoto = event.target.files[0] || null;
@@ -1586,8 +1605,8 @@ async function renderNominate() {
       msg.innerHTML = `<div class="msg err">Name and institution are required.</div>`;
       return;
     }
-    if (!inviteMode && !handleRaw) {
-      msg.innerHTML = `<div class="msg err">Enter their handle, or check "they don't have an account yet".</div>`;
+    if (!handleRaw) {
+      msg.innerHTML = `<div class="msg err">Enter their handle. They need a MOGGOFF account to be nominated.</div>`;
       return;
     }
     const button = document.getElementById("submitNomination");
@@ -1595,22 +1614,15 @@ async function renderNominate() {
     button.textContent = "Sending...";
     try {
       const photoURL = await uploadPhoto(selectedNominationPhoto);
-      const result = await createNomination({
-        candidateName: name, institutionId, gender: selectedGender, photoURL, inviteMode, targetHandle: handleRaw,
-      });
-      if (inviteMode) {
-        const link = `${location.origin}${location.pathname}#/join/${result.inviteToken}`;
-        msg.innerHTML = `<div class="msg ok">Invite created. Send this link to ${esc(name)} so they can sign up and accept:<br><a href="${link}">${esc(link)}</a></div>`;
-      } else {
-        msg.innerHTML = `<div class="msg ok">Request sent to @${esc(handleRaw)}. It'll show up in their Requests tab - they'll appear on the board once they accept.</div>`;
-        document.getElementById("nomName").value = "";
-        document.getElementById("nomHandle").value = "";
-      }
+      await createNomination({ candidateName: name, institutionId, gender: selectedGender, photoURL, targetHandle: handleRaw });
+      msg.innerHTML = `<div class="msg ok">Request sent to @${esc(handleRaw)}. It'll show up in their Requests tab - they'll appear on the board once they accept.</div>`;
+      document.getElementById("nomName").value = "";
+      document.getElementById("nomHandle").value = "";
     } catch (error) {
       msg.innerHTML = `<div class="msg err">${esc(error.message)}</div>`;
     } finally {
       button.disabled = false;
-      button.textContent = inviteMode ? "Create invite link" : "Send nomination";
+      button.textContent = "Send nomination";
     }
   };
 }
@@ -1620,10 +1632,10 @@ function renderChooseHandle() {
   main.innerHTML = `
     <div class="eyebrow">One more thing</div>
     <h1>Pick your handle</h1>
-    <p class="sub">This is how people nominate you and how you show up on MOGGOFF - like <b>@sujosh</b>. Letters, numbers, and underscores only, 3-20 characters. You can change it later.</p>
+    <p class="sub">This is how people nominate you and how you show up on MOGGOFF - like <b>@trueadam</b>. Letters, numbers, and underscores only, 3-20 characters. You can change it later.</p>
     <div class="card">
       <div id="handleMsg"></div>
-      <div class="field"><label>Handle</label><input id="handleInput" type="text" placeholder="e.g. sujosh" maxlength="20" autofocus></div>
+      <div class="field"><label>Handle</label><input id="handleInput" type="text" placeholder="e.g. trueadam" maxlength="20" autofocus></div>
       <button class="btn" id="handleSaveBtn" style="width:100%">Save handle</button>
     </div>
   `;
@@ -1641,9 +1653,7 @@ function renderChooseHandle() {
       await claimHandle(raw);
       currentUserDoc.handle = raw;
       renderNav();
-      const nextToken = pendingInviteToken;
-      pendingInviteToken = null;
-      go(nextToken ? `/join/${nextToken}` : "/");
+      go("/");
       showToast("Handle set. Welcome to MOGGOFF.", "ok");
     } catch (error) {
       msg.innerHTML = `<div class="msg err">${esc(error.message)}</div>`;
@@ -1698,42 +1708,6 @@ async function respondToRequest(nominationId, action) {
   } catch (error) {
     showToast(error.message || "Something went wrong.", "err");
   }
-}
-
-async function renderJoinInvite(token) {
-  const main = document.getElementById("main");
-  let preview;
-  try {
-    preview = await getInvitePreview(token);
-  } catch (error) {
-    main.innerHTML = `<div class="empty">${esc(error.message)}</div>`;
-    return;
-  }
-
-  if (currentUser && currentUserDoc?.handle) {
-    try {
-      await claimInvite(token);
-      pendingInviteToken = null;
-      go("/requests");
-      showToast("Nomination added to your requests.", "ok");
-    } catch (error) {
-      main.innerHTML = `<div class="empty">${esc(error.message)}</div>`;
-    }
-    return;
-  }
-
-  pendingInviteToken = token;
-  main.innerHTML = `
-    <div class="eyebrow">You've been nominated</div>
-    <h1>${esc(preview.candidateName)}, join MOGGOFF to accept</h1>
-    <p class="sub">Someone nominated you for the ${preview.gender === "chad" ? "CHAD" : "STACY"} board at ${esc(preview.institutionName || "")}. Create an account to see and accept the request - nothing goes public until you do.</p>
-    <div class="card">
-      <button class="btn" style="width:100%;margin-bottom:10px" id="joinSignupBtn">Create account</button>
-      <button class="btn btn-secondary" style="width:100%" id="joinLoginBtn">I already have an account</button>
-    </div>
-  `;
-  document.getElementById("joinSignupBtn").onclick = () => go("/signup");
-  document.getElementById("joinLoginBtn").onclick = () => go("/login");
 }
 
 function renderLogin() {

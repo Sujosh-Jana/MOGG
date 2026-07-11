@@ -224,66 +224,49 @@ router.post('/nominations', authMiddleware, nominationLimiter, async (req, res, 
     const institutionId = String(req.body?.institutionId || '').trim();
     const gender = normalizeGender(req.body?.gender);
     const photoURL = cleanUrl(req.body?.photoURL);
-    const inviteMode = Boolean(req.body?.inviteMode);
     const targetHandleInput = normalizeHandle(req.body?.targetHandle);
 
     if (!candidateName || !institutionId || !gender) {
       return res.status(400).json({ error: 'candidateName, institutionId, and gender are required.' });
     }
-    if (!inviteMode && !targetHandleInput) {
-      return res.status(400).json({ error: "Enter the nominee's handle, or check \"they don't have an account yet\"." });
+    if (!targetHandleInput) {
+      return res.status(400).json({ error: "Enter the nominee's handle. They need a MOGGOFF account to be nominated." });
     }
 
     const institution = await getApprovedAdultInstitution(institutionId);
     const normalizedName = normalizeName(candidateName);
 
-    let targetUid = null;
-    let targetHandle = null;
+    const handleSnap = await db.collection('handles').doc(targetHandleInput).get();
+    if (!handleSnap.exists) {
+      return res.status(404).json({
+        error: `No account found with the handle @${targetHandleInput}. They need a MOGGOFF account to be nominated.`,
+      });
+    }
+    const targetUid = handleSnap.data().uid;
+    const targetHandle = targetHandleInput;
 
-    if (inviteMode) {
-      const duplicateInvite = await db.collection('nominations')
-        .where('institutionId', '==', institutionId)
-        .where('candidateNameNormalized', '==', normalizedName)
-        .where('status', '==', 'pending_invite')
-        .limit(1)
-        .get();
-      if (!duplicateInvite.empty) {
-        return res.status(409).json({ error: 'An invite for this name is already pending at that institution.' });
-      }
-    } else {
-      const handleSnap = await db.collection('handles').doc(targetHandleInput).get();
-      if (!handleSnap.exists) {
-        return res.status(404).json({
-          error: `No account found with the handle @${targetHandleInput}. If they don't have an account yet, use the "they don't have an account" option instead.`,
-        });
-      }
-      targetUid = handleSnap.data().uid;
-      targetHandle = targetHandleInput;
+    const alreadyListed = await db.collection('candidates')
+      .where('institutionId', '==', institutionId)
+      .where('gender', '==', gender)
+      .where('confirmedUid', '==', targetUid)
+      .where('status', '==', 'confirmed')
+      .limit(1)
+      .get();
+    if (!alreadyListed.empty) {
+      return res.status(409).json({ error: 'This person is already ranked at that institution.' });
+    }
 
-      const alreadyListed = await db.collection('candidates')
-        .where('institutionId', '==', institutionId)
-        .where('gender', '==', gender)
-        .where('confirmedUid', '==', targetUid)
-        .where('status', '==', 'confirmed')
-        .limit(1)
-        .get();
-      if (!alreadyListed.empty) {
-        return res.status(409).json({ error: 'This person is already ranked at that institution.' });
-      }
-
-      const pendingForTarget = await db.collection('nominations')
-        .where('institutionId', '==', institutionId)
-        .where('targetUid', '==', targetUid)
-        .where('status', '==', 'pending')
-        .limit(1)
-        .get();
-      if (!pendingForTarget.empty) {
-        return res.status(409).json({ error: 'This person already has a pending nomination request at that institution.' });
-      }
+    const pendingForTarget = await db.collection('nominations')
+      .where('institutionId', '==', institutionId)
+      .where('targetUid', '==', targetUid)
+      .where('status', '==', 'pending')
+      .limit(1)
+      .get();
+    if (!pendingForTarget.empty) {
+      return res.status(409).json({ error: 'This person already has a pending nomination request at that institution.' });
     }
 
     const confirmToken = uuidv4().replace(/-/g, '');
-    const inviteToken = inviteMode ? uuidv4().replace(/-/g, '') : null;
     const doc = {
       candidateName,
       candidateNameNormalized: normalizedName,
@@ -293,10 +276,9 @@ router.post('/nominations', authMiddleware, nominationLimiter, async (req, res, 
       photoURL,
       nominatorUid: req.user.uid,
       nominatorEmail: req.user.email || '',
-      status: inviteMode ? 'pending_invite' : 'pending',
+      status: 'pending',
       targetUid,
       targetHandle,
-      inviteToken,
       confirmToken,
       consentModel: 'candidate_must_confirm',
       createdAt: FieldValue.serverTimestamp(),
@@ -307,12 +289,10 @@ router.post('/nominations', authMiddleware, nominationLimiter, async (req, res, 
       nominationId: ref.id,
       institutionId,
       candidateName,
-      inviteMode,
     }));
 
     res.status(201).json({
       nomination: { id: ref.id, ...doc, createdAt: new Date().toISOString(), updatedAt: new Date().toISOString() },
-      inviteToken,
     });
   } catch (err) {
     next(err);
@@ -458,56 +438,6 @@ router.post('/nominations/:id/decline', authMiddleware, async (req, res, next) =
     });
     await db.collection('ranked_audit').add(buildAudit('nomination_flagged', req.user, { nominationId }));
     res.json({ ok: true });
-  } catch (err) {
-    next(err);
-  }
-});
-
-// ── Invite links (for nominating someone with no account yet) ────────────
-router.get('/invites/:token', async (req, res, next) => {
-  try {
-    const token = String(req.params.token || '').trim();
-    const snap = await db.collection('nominations').where('inviteToken', '==', token).limit(1).get();
-    if (snap.empty) return res.status(404).json({ error: 'Invite link is invalid or expired.' });
-    const nomination = serializeDoc(snap.docs[0]);
-    if (!['pending_invite', 'pending'].includes(nomination.status)) {
-      return res.status(409).json({ error: 'This invite has already been used or is no longer valid.' });
-    }
-    res.json({
-      preview: {
-        candidateName: nomination.candidateName,
-        institutionName: nomination.institutionName,
-        gender: nomination.gender,
-        claimed: nomination.status === 'pending',
-      },
-    });
-  } catch (err) {
-    next(err);
-  }
-});
-
-router.post('/invites/:token/claim', authMiddleware, async (req, res, next) => {
-  try {
-    const token = String(req.params.token || '').trim();
-    const result = await db.runTransaction(async (tx) => {
-      const snap = await queryOneInTransaction(tx, db.collection('nominations').where('inviteToken', '==', token).limit(1));
-      if (!snap) throw Object.assign(new Error('Invite link is invalid or expired.'), { status: 404 });
-      const nomination = snap.data() || {};
-      if (nomination.status === 'pending' && nomination.targetUid === req.user.uid) {
-        return { alreadyClaimed: true };
-      }
-      if (nomination.status !== 'pending_invite') {
-        throw Object.assign(new Error('This invite has already been used.'), { status: 409 });
-      }
-      tx.update(snap.ref, {
-        status: 'pending',
-        targetUid: req.user.uid,
-        targetEmail: req.user.email || '',
-        updatedAt: FieldValue.serverTimestamp(),
-      });
-      return { alreadyClaimed: false };
-    });
-    res.json(result);
   } catch (err) {
     next(err);
   }
