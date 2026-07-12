@@ -324,6 +324,64 @@ h1 {
   object-fit: cover;
   background: var(--panel);
 }
+.profile-banner-wrap {
+  position: relative;
+  margin-bottom: 56px;
+}
+.profile-banner {
+  width: 100%;
+  height: 180px;
+  border-radius: var(--radius);
+  border: 1px solid var(--line);
+  object-fit: cover;
+  background: linear-gradient(135deg, #1a1a20, #232329);
+  display: block;
+}
+.profile-avatar-lg {
+  position: absolute;
+  left: 20px;
+  bottom: -44px;
+  width: 96px;
+  height: 96px;
+  border-radius: 14px;
+  border: 4px solid var(--bg);
+  object-fit: cover;
+  background: var(--panel);
+}
+.profile-edit-btn {
+  position: absolute;
+  right: 14px;
+  bottom: 14px;
+}
+.social-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-top: 12px;
+}
+.social-chip {
+  padding: 6px 12px;
+  border: 1px solid var(--line);
+  border-radius: 99px;
+  font-size: 12px;
+  color: var(--muted);
+  text-decoration: none;
+}
+.social-chip:hover { border-color: var(--gold); color: var(--gold); }
+.listing-chip {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  padding: 12px 14px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  background: var(--panel-2);
+  text-decoration: none;
+  color: inherit;
+  margin-bottom: 10px;
+}
+.listing-chip:hover { border-color: #3a3a45; }
 .candidate-name {
   overflow: hidden;
   text-overflow: ellipsis;
@@ -626,6 +684,11 @@ function loadDemo() {
   (data.users || []).forEach(user => {
     if (user.handle === undefined) user.handle = null;
     if (user.handle && !data.handles[user.handle]) data.handles[user.handle] = user.id;
+    if (user.displayName === undefined) user.displayName = null;
+    if (user.avatarURL === undefined) user.avatarURL = null;
+    if (user.bannerURL === undefined) user.bannerURL = null;
+    if (user.bio === undefined) user.bio = "";
+    if (!user.socialLinks) user.socialLinks = {};
   });
   (data.nominations || []).forEach(nomination => {
     if (nomination.targetUid === undefined) nomination.targetUid = null;
@@ -769,6 +832,11 @@ async function uploadPhoto(file) {
   return compressImage(file);
 }
 
+async function uploadBanner(file) {
+  if (!file) return null;
+  return compressImage(file, 960, 0.72);
+}
+
 async function apiJson(path, options = {}) {
   const headers = { ...(options.headers || {}) };
   let body = options.body;
@@ -819,7 +887,7 @@ function renderNav() {
       <a href="#/nominate">+ Nominate</a>
       <a href="#/requests" id="requestsLink">Requests</a>
       ${isAdmin() ? `<a href="/ranked-admin.html">Admin</a>` : ""}
-      <span>${handle ? `@${esc(handle)}` : esc(currentUser.email.split("@")[0])}</span>
+      ${handle ? `<a href="#/u/${esc(handle)}">@${esc(handle)}</a>` : `<span>${esc(currentUser.email.split("@")[0])}</span>`}
       <button class="btn btn-secondary btn-sm" id="logoutBtn">Log out</button>
     `;
     document.getElementById("logoutBtn").onclick = logout;
@@ -917,6 +985,25 @@ async function getInstitution(id) {
   return demo.institutions.find(item => item.id === id) || null;
 }
 
+// Mirrors the backend's attachOwnerProfiles: merges each candidate's shared
+// site-wide identity (avatar/bio/social/displayName) from demo.users, since
+// one profile is now reused across every listing that person holds.
+function attachOwnerProfilesDemo(list) {
+  return list.map(item => {
+    if (!item.confirmedUid) return item;
+    const user = demo.users.find(u => u.id === item.confirmedUid);
+    if (!user) return item;
+    return {
+      ...item,
+      photoURL: user.avatarURL || item.photoURL || null,
+      bio: user.bio || item.bio || "",
+      socialLinks: (user.socialLinks && Object.keys(user.socialLinks).length) ? user.socialLinks : (item.socialLinks || {}),
+      displayName: user.displayName || null,
+      ownerHandle: user.handle || null,
+    };
+  });
+}
+
 async function getCandidates(filter = {}) {
   if (hasFirebaseConfig) {
     const params = new URLSearchParams();
@@ -925,11 +1012,12 @@ async function getCandidates(filter = {}) {
     const data = await apiJson(`/candidates${params.toString() ? `?${params}` : ""}`);
     return data.candidates || [];
   }
-  return demo.candidates
+  const list = demo.candidates
     .filter(item => !filter.institutionId || item.institutionId === filter.institutionId)
     .filter(item => !filter.gender || item.gender === filter.gender)
     .filter(item => !filter.status || item.status === filter.status)
     .sort((a, b) => filter.orderByCreated ? b.createdAt - a.createdAt : (b.score || b.upvotes || 0) - (a.score || a.upvotes || 0));
+  return attachOwnerProfilesDemo(list);
 }
 
 async function getCandidateProfile(id) {
@@ -937,8 +1025,9 @@ async function getCandidateProfile(id) {
     const data = await apiJson(`/candidates/${encodeURIComponent(id)}`);
     return data;
   }
-  const candidate = demo.candidates.find(item => item.id === id && item.status === "confirmed");
-  if (!candidate) return { candidate: null, rank: null, totalConfirmed: null };
+  const found = demo.candidates.find(item => item.id === id && item.status === "confirmed");
+  if (!found) return { candidate: null, rank: null, totalConfirmed: null };
+  const candidate = attachOwnerProfilesDemo([found])[0];
   const peers = demo.candidates
     .filter(item => item.institutionId === candidate.institutionId && item.gender === candidate.gender && item.status === "confirmed")
     .sort((a, b) => (b.score || b.upvotes || 0) - (a.score || a.upvotes || 0));
@@ -983,6 +1072,77 @@ async function claimHandle(handle) {
   if (user.handle && user.handle !== handle) delete demo.handles[user.handle];
   user.handle = handle;
   demo.handles[handle] = currentUser.uid;
+  saveDemo();
+}
+
+// ── Site-wide profile (banner, avatar, bio, social links) ─────────────────
+// One shared identity per handle, reused everywhere that person is listed.
+async function getUserProfile(handle) {
+  if (hasFirebaseConfig) {
+    const data = await apiJson(`/users/${encodeURIComponent(handle)}`);
+    return data;
+  }
+  const uid = demo.handles[handle];
+  if (!uid) throw new Error("No account with that handle.");
+  const user = demo.users.find(item => item.id === uid) || {};
+  const listings = demo.candidates
+    .filter(item => item.confirmedUid === uid && item.status === "confirmed")
+    .map(item => ({
+      id: item.id, name: item.name, gender: item.gender,
+      institutionId: item.institutionId, institutionName: item.institutionName, score: item.score,
+    }));
+  return {
+    profile: {
+      handle,
+      displayName: user.displayName || null,
+      avatarURL: user.avatarURL || null,
+      bannerURL: user.bannerURL || null,
+      bio: user.bio || "",
+      socialLinks: user.socialLinks || {},
+    },
+    listings,
+  };
+}
+
+async function updateMyProfile({ displayName, bio, socialLinks }) {
+  if (hasFirebaseConfig) {
+    await apiJson("/me/profile", { method: "PATCH", body: { displayName, bio, socialLinks } });
+    return;
+  }
+  const user = demo.users.find(item => item.id === currentUser.uid);
+  if (!user) throw new Error("Account not found.");
+  if (typeof displayName === "string") user.displayName = displayName.trim().slice(0, 90) || null;
+  if (typeof bio === "string") user.bio = bio.trim().slice(0, 280);
+  if (socialLinks && typeof socialLinks === "object") {
+    user.socialLinks = { ...(user.socialLinks || {}) };
+    Object.keys(socialLinks).forEach(field => {
+      const value = String(socialLinks[field] || "").trim();
+      if (value) user.socialLinks[field] = value;
+      else delete user.socialLinks[field];
+    });
+  }
+  saveDemo();
+}
+
+async function updateMyAvatar(photoURL) {
+  if (hasFirebaseConfig) {
+    await apiJson("/me/avatar", { method: "PATCH", body: { photoURL } });
+    return;
+  }
+  const user = demo.users.find(item => item.id === currentUser.uid);
+  if (!user) throw new Error("Account not found.");
+  user.avatarURL = photoURL;
+  saveDemo();
+}
+
+async function updateMyBanner(photoURL) {
+  if (hasFirebaseConfig) {
+    await apiJson("/me/banner", { method: "PATCH", body: { photoURL } });
+    return;
+  }
+  const user = demo.users.find(item => item.id === currentUser.uid);
+  if (!user) throw new Error("Account not found.");
+  user.bannerURL = photoURL;
   saveDemo();
 }
 
@@ -1070,6 +1230,7 @@ async function router() {
     if (parts[0] === "candidate" && parts[1]) return renderCandidateProfile(parts[1]);
     if (parts[0] === "nominate") return requireAuth(renderNominate);
     if (parts[0] === "requests") return requireAuth(renderRequests);
+    if (parts[0] === "u" && parts[1]) return renderUserProfile(parts[1]);
     if (parts[0] === "handle") return requireAuth(renderChooseHandle);
     if (parts[0] === "login") return renderLogin();
     if (parts[0] === "signup") return renderSignup();
@@ -1262,7 +1423,7 @@ async function renderCandidateProfile(id) {
     <div class="profile-head">
       <img class="avatar" style="width:96px;height:96px" src="${candidate.photoURL || placeholder(candidate.name)}" alt="">
       <div>
-        <h1 style="margin:0 0 4px">${esc(candidate.name)}</h1>
+        <h1 style="margin:0 0 4px">${candidate.ownerHandle ? `<a class="link" style="color:inherit" href="#/u/${esc(candidate.ownerHandle)}">${esc(candidate.name)}</a>` : esc(candidate.name)}</h1>
         <p class="sub" style="margin:0">${rank ? `#${rank}${totalConfirmed ? ` of ${totalConfirmed}` : ""} ${candidate.gender === "chad" ? "CHAD" : "STACY"} at ${esc(candidate.institutionName || "")}` : esc(candidate.institutionName || "")}</p>
         <p class="candidate-meta" style="margin-top:6px">On MOGGOFF since ${formatJoinedDate(candidate.createdAt)}</p>
       </div>
@@ -1337,65 +1498,20 @@ async function handleProfileVote(candidate, direction) {
 }
 
 function renderOwnerPanel(candidate) {
+  const handle = candidate.ownerHandle || currentUserDoc?.handle || "";
   return `
     <div class="card">
-      <div class="eyebrow">This is your profile</div>
-      <h2 style="margin-top:4px">Edit your listing</h2>
+      <div class="eyebrow">This is your listing</div>
+      <h2 style="margin-top:4px">Manage this listing</h2>
       <div id="ownerMsg"></div>
-      <div class="field">
-        <label>Photo</label>
-        <button class="drop" id="ownerPhotoDrop" type="button">Click to upload new photo</button>
-        <input id="ownerPhotoInput" type="file" accept="image/*" hidden>
-      </div>
-      <div class="field"><label>Bio (max 280 characters)</label><textarea id="ownerBio" rows="3" maxlength="280">${esc(candidate.bio || "")}</textarea></div>
-      ${Object.entries(SOCIAL_META).map(([key, meta]) => `
-        <div class="field"><label>${meta.label}</label><input id="social_${key}" type="url" placeholder="https://..." value="${esc(candidate.socialLinks?.[key] || "")}"></div>
-      `).join("")}
-      <button class="btn" id="ownerSaveBtn" style="width:100%;margin-bottom:10px">Save changes</button>
-      <button class="btn btn-danger" id="ownerOptOutBtn" style="width:100%">Remove me from MOGGOFF</button>
+      <p class="sub">Your photo, bio, and social links are shared across every board you're on. <a class="link" href="#/u/${esc(handle)}">Edit your MOGGOFF profile</a> to update them everywhere at once.</p>
+      <button class="btn btn-danger" id="ownerOptOutBtn" style="width:100%">Remove me from this board</button>
     </div>
   `;
 }
 
 function wireOwnerPanel(candidate) {
   const msg = document.getElementById("ownerMsg");
-  document.getElementById("ownerPhotoDrop").onclick = () => document.getElementById("ownerPhotoInput").click();
-  document.getElementById("ownerPhotoInput").onchange = async event => {
-    const file = event.target.files[0];
-    if (!file) return;
-    try {
-      const photoURL = await uploadPhoto(file);
-      if (hasFirebaseConfig) await apiJson(`/candidates/${encodeURIComponent(candidate.id)}/photo`, { method: "PATCH", body: { photoURL } });
-      else { candidate.photoURL = photoURL; saveDemo(); }
-      msg.innerHTML = `<div class="msg ok">Photo updated.</div>`;
-      document.querySelector(".profile-head .avatar").src = photoURL;
-    } catch (error) {
-      msg.innerHTML = `<div class="msg err">${esc(error.message)}</div>`;
-    }
-  };
-  document.getElementById("ownerSaveBtn").onclick = async () => {
-    const button = document.getElementById("ownerSaveBtn");
-    button.disabled = true;
-    button.textContent = "Saving...";
-    const bio = document.getElementById("ownerBio").value.trim().slice(0, 280);
-    const socialLinks = {};
-    Object.keys(SOCIAL_META).forEach(key => { socialLinks[key] = document.getElementById(`social_${key}`).value.trim(); });
-    try {
-      if (hasFirebaseConfig) {
-        await apiJson(`/candidates/${encodeURIComponent(candidate.id)}/profile`, { method: "PATCH", body: { bio, socialLinks } });
-      } else {
-        candidate.bio = bio;
-        candidate.socialLinks = socialLinks;
-        saveDemo();
-      }
-      msg.innerHTML = `<div class="msg ok">Saved.</div>`;
-    } catch (error) {
-      msg.innerHTML = `<div class="msg err">${esc(error.message)}</div>`;
-    } finally {
-      button.disabled = false;
-      button.textContent = "Save changes";
-    }
-  };
   document.getElementById("ownerOptOutBtn").onclick = async () => {
     if (!confirm("Remove this listing and its votes? This can't be undone.")) return;
     try {
@@ -1708,6 +1824,122 @@ async function respondToRequest(nominationId, action) {
   } catch (error) {
     showToast(error.message || "Something went wrong.", "err");
   }
+}
+
+async function renderUserProfile(handle) {
+  const main = document.getElementById("main");
+  let data;
+  try {
+    data = await getUserProfile(handle);
+  } catch (error) {
+    main.innerHTML = `<div class="empty">${esc(error.message)}</div>`;
+    return;
+  }
+  const { profile, listings } = data;
+  const isOwn = currentUserDoc?.handle === handle;
+  const links = Object.entries(SOCIAL_META)
+    .filter(([key]) => profile.socialLinks?.[key])
+    .map(([key, meta]) => `<a class="social-pill" href="${esc(profile.socialLinks[key])}" target="_blank" rel="noopener">${meta.icon} ${meta.label}</a>`)
+    .join("");
+
+  main.innerHTML = `
+    <div class="profile-banner-wrap">
+      <img class="profile-banner" id="bannerImg" src="${profile.bannerURL || ""}" alt="" style="${profile.bannerURL ? "" : "display:none"}">
+      ${profile.bannerURL ? "" : `<div class="profile-banner"></div>`}
+      <img class="profile-avatar-lg" src="${profile.avatarURL || placeholder(profile.displayName || handle)}" alt="">
+      ${isOwn ? `<button class="btn btn-secondary btn-sm profile-edit-btn" id="editProfileBtn">Edit profile</button>` : ""}
+    </div>
+    <h1 style="margin:0 0 2px">${esc(profile.displayName || `@${handle}`)}</h1>
+    <p class="sub" style="margin:0">@${esc(handle)}</p>
+    ${profile.bio ? `<p class="sub" style="margin:14px 0">${esc(profile.bio)}</p>` : ""}
+    ${links ? `<div class="social-row">${links}</div>` : ""}
+    <div id="profileEditorHost"></div>
+    <div class="eyebrow" style="margin-top:28px">Ranked at</div>
+    <div style="margin-top:12px">
+      ${listings.length ? listings.map(item => `
+        <a class="listing-chip" href="#/candidate/${item.id}">
+          <span>${esc(item.institutionName || "")} - ${item.gender === "chad" ? "CHAD" : "STACY"}</span>
+          <span class="candidate-meta">score ${item.score || 0}</span>
+        </a>`).join("") : `<div class="empty">Not on any boards yet.</div>`}
+    </div>
+  `;
+
+  if (isOwn) {
+    document.getElementById("editProfileBtn").onclick = () => renderProfileEditor(profile);
+  }
+}
+
+function renderProfileEditor(profile) {
+  const host = document.getElementById("profileEditorHost");
+  host.innerHTML = `
+    <div class="card" style="margin-top:16px">
+      <div class="eyebrow">Edit your profile</div>
+      <div id="profileEditMsg"></div>
+      <div class="field">
+        <label>Banner</label>
+        <button class="drop" id="bannerDrop" type="button">Click to upload a banner image</button>
+        <input id="bannerInput" type="file" accept="image/*" hidden>
+      </div>
+      <div class="field">
+        <label>Avatar</label>
+        <button class="drop" id="avatarDrop" type="button">Click to upload a profile photo</button>
+        <input id="avatarInput" type="file" accept="image/*" hidden>
+      </div>
+      <div class="field"><label>Display name</label><input id="profileDisplayName" type="text" maxlength="90" placeholder="Shown above your handle" value="${esc(profile.displayName || "")}"></div>
+      <div class="field"><label>Bio (max 280 characters)</label><textarea id="profileBio" rows="3" maxlength="280">${esc(profile.bio || "")}</textarea></div>
+      ${Object.entries(SOCIAL_META).map(([key, meta]) => `
+        <div class="field"><label>${meta.label}</label><input id="social_${key}" type="url" placeholder="https://..." value="${esc(profile.socialLinks?.[key] || "")}"></div>
+      `).join("")}
+      <button class="btn" id="profileSaveBtn" style="width:100%">Save profile</button>
+    </div>
+  `;
+  const msg = document.getElementById("profileEditMsg");
+
+  document.getElementById("bannerDrop").onclick = () => document.getElementById("bannerInput").click();
+  document.getElementById("bannerInput").onchange = async event => {
+    const file = event.target.files[0];
+    if (!file) return;
+    try {
+      const photoURL = await uploadBanner(file);
+      await updateMyBanner(photoURL);
+      document.getElementById("bannerImg").src = photoURL;
+      document.getElementById("bannerImg").style.display = "";
+      msg.innerHTML = `<div class="msg ok">Banner updated.</div>`;
+    } catch (error) {
+      msg.innerHTML = `<div class="msg err">${esc(error.message)}</div>`;
+    }
+  };
+  document.getElementById("avatarDrop").onclick = () => document.getElementById("avatarInput").click();
+  document.getElementById("avatarInput").onchange = async event => {
+    const file = event.target.files[0];
+    if (!file) return;
+    try {
+      const photoURL = await uploadPhoto(file);
+      await updateMyAvatar(photoURL);
+      document.querySelector(".profile-avatar-lg").src = photoURL;
+      msg.innerHTML = `<div class="msg ok">Avatar updated.</div>`;
+    } catch (error) {
+      msg.innerHTML = `<div class="msg err">${esc(error.message)}</div>`;
+    }
+  };
+  document.getElementById("profileSaveBtn").onclick = async () => {
+    const button = document.getElementById("profileSaveBtn");
+    button.disabled = true;
+    button.textContent = "Saving...";
+    const displayName = document.getElementById("profileDisplayName").value.trim();
+    const bio = document.getElementById("profileBio").value.trim().slice(0, 280);
+    const socialLinks = {};
+    Object.keys(SOCIAL_META).forEach(key => { socialLinks[key] = document.getElementById(`social_${key}`).value.trim(); });
+    try {
+      await updateMyProfile({ displayName, bio, socialLinks });
+      msg.innerHTML = `<div class="msg ok">Saved. This updates everywhere you're listed.</div>`;
+    } catch (error) {
+      msg.innerHTML = `<div class="msg err">${esc(error.message)}</div>`;
+    } finally {
+      button.disabled = false;
+      button.textContent = "Save profile";
+    }
+  };
 }
 
 function renderLogin() {

@@ -70,7 +70,8 @@ router.get('/candidates', async (req, res, next) => {
     if (institutionId) query = query.where('institutionId', '==', institutionId);
     if (gender) query = query.where('gender', '==', gender);
     const snap = await query.get();
-    res.json({ candidates: snap.docs.map(serializeDoc) });
+    const candidates = await attachOwnerProfiles(snap.docs.map(serializeDoc));
+    res.json({ candidates });
   } catch (err) {
     next(err);
   }
@@ -83,7 +84,8 @@ router.get('/ticker', async (req, res, next) => {
       .orderBy('score', 'desc')
       .limit(12)
       .get();
-    res.json({ candidates: snap.docs.map(serializeDoc) });
+    const candidates = await attachOwnerProfiles(snap.docs.map(serializeDoc));
+    res.json({ candidates });
   } catch (err) {
     next(err);
   }
@@ -344,6 +346,92 @@ router.get('/handles/:handle', async (req, res, next) => {
   }
 });
 
+// ── Site-wide profile (banner, avatar, bio, social links) ────────────────
+// One shared identity per person, reused across every institution they're
+// listed at - editing it here updates every listing at once.
+router.get('/users/:handle', async (req, res, next) => {
+  try {
+    const handle = normalizeHandle(req.params.handle);
+    if (!handle) return res.status(400).json({ error: 'Invalid handle.' });
+    const handleSnap = await db.collection('handles').doc(handle).get();
+    if (!handleSnap.exists) return res.status(404).json({ error: 'No account with that handle.' });
+    const uid = handleSnap.data().uid;
+    const userSnap = await db.collection('users').doc(uid).get();
+    const userData = userSnap.exists ? userSnap.data() || {} : {};
+    const listingsSnap = await db.collection('candidates')
+      .where('confirmedUid', '==', uid)
+      .where('status', '==', 'confirmed')
+      .get();
+
+    res.json({
+      profile: {
+        handle,
+        displayName: userData.displayName || null,
+        avatarURL: userData.avatarURL || null,
+        bannerURL: userData.bannerURL || null,
+        bio: userData.bio || '',
+        socialLinks: userData.socialLinks || {},
+      },
+      listings: listingsSnap.docs.map((doc) => {
+        const item = serializeDoc(doc);
+        return {
+          id: item.id,
+          name: item.name,
+          gender: item.gender,
+          institutionId: item.institutionId,
+          institutionName: item.institutionName,
+          score: item.score,
+        };
+      }),
+    });
+  } catch (err) {
+    next(err);
+  }
+});
+
+router.patch('/me/profile', authMiddleware, async (req, res, next) => {
+  try {
+    const body = req.body || {};
+    const patch = { updatedAt: FieldValue.serverTimestamp() };
+    if (typeof body.displayName === 'string') patch.displayName = cleanName(body.displayName) || null;
+    if (typeof body.bio === 'string') patch.bio = body.bio.trim().slice(0, 280);
+    if (body.socialLinks && typeof body.socialLinks === 'object') {
+      for (const field of SOCIAL_FIELDS) {
+        if (!Object.prototype.hasOwnProperty.call(body.socialLinks, field)) continue;
+        const raw = String(body.socialLinks[field] || '').trim();
+        patch[`socialLinks.${field}`] = raw ? (cleanUrl(raw) || null) : null;
+      }
+    }
+    await db.collection('users').doc(req.user.uid).set(patch, { merge: true });
+    await db.collection('ranked_audit').add(buildAudit('profile_updated', req.user, {}));
+    res.json({ ok: true });
+  } catch (err) {
+    next(err);
+  }
+});
+
+router.patch('/me/avatar', authMiddleware, async (req, res, next) => {
+  try {
+    const photoURL = cleanUrl(req.body?.photoURL);
+    if (!photoURL) return res.status(400).json({ error: 'photoURL is required.' });
+    await db.collection('users').doc(req.user.uid).set({ avatarURL: photoURL, updatedAt: FieldValue.serverTimestamp() }, { merge: true });
+    res.json({ ok: true });
+  } catch (err) {
+    next(err);
+  }
+});
+
+router.patch('/me/banner', authMiddleware, async (req, res, next) => {
+  try {
+    const photoURL = cleanUrl(req.body?.photoURL);
+    if (!photoURL) return res.status(400).json({ error: 'photoURL is required.' });
+    await db.collection('users').doc(req.user.uid).set({ bannerURL: photoURL, updatedAt: FieldValue.serverTimestamp() }, { merge: true });
+    res.json({ ok: true });
+  } catch (err) {
+    next(err);
+  }
+});
+
 // ── Nomination requests (inbox for the person who was nominated) ─────────
 router.get('/me/requests', authMiddleware, async (req, res, next) => {
   try {
@@ -464,7 +552,8 @@ router.get('/candidates/:id', async (req, res, next) => {
       rank = index === -1 ? null : index + 1;
       totalConfirmed = peers.size;
     }
-    res.json({ candidate: serializeDoc(snap), rank, totalConfirmed });
+    const [candidate] = await attachOwnerProfiles([serializeDoc(snap)]);
+    res.json({ candidate, rank, totalConfirmed });
   } catch (err) {
     next(err);
   }
@@ -860,6 +949,30 @@ async function getCandidateForOwnerOrAdmin(id, user) {
 function normalizeHandle(value) {
   const handle = String(value || '').trim().toLowerCase().replace(/^@/, '');
   return HANDLE_RE.test(handle) ? handle : null;
+}
+
+// Since the person's identity (avatar/bio/social links) is now one shared
+// profile living on their `users/{uid}` doc, every candidate listing they
+// hold needs that merged in - their own per-candidate fields are only a
+// fallback for the (rare) case they haven't set up a profile yet.
+async function attachOwnerProfiles(docs) {
+  const uids = [...new Set(docs.map((doc) => doc.confirmedUid).filter(Boolean))];
+  if (!uids.length) return docs;
+  const snaps = await db.getAll(...uids.map((uid) => db.collection('users').doc(uid)));
+  const profiles = new Map();
+  snaps.forEach((snap) => { if (snap.exists) profiles.set(snap.id, snap.data() || {}); });
+  return docs.map((doc) => {
+    const profile = doc.confirmedUid ? profiles.get(doc.confirmedUid) : null;
+    if (!profile) return doc;
+    return {
+      ...doc,
+      photoURL: profile.avatarURL || doc.photoURL || null,
+      bio: profile.bio || doc.bio || '',
+      socialLinks: (profile.socialLinks && Object.keys(profile.socialLinks).length) ? profile.socialLinks : (doc.socialLinks || {}),
+      displayName: profile.displayName || null,
+      ownerHandle: profile.handle || null,
+    };
+  });
 }
 
 async function queryOneInTransaction(tx, query) {
