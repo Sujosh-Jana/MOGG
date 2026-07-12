@@ -97,23 +97,11 @@ img { display: block; }
   border-bottom: 1px solid var(--line-soft);
   background: linear-gradient(180deg, #141417, #09090a);
 }
-.handle-search {
-  display: flex;
-  align-items: center;
-  gap: 6px;
+.topbar .search {
   flex: 1;
-  max-width: 260px;
-}
-.handle-search input {
-  min-height: 34px;
-  padding: 6px 10px;
-  font-size: 13px;
-}
-.handle-search button {
-  min-height: 34px;
-  padding: 6px 12px;
-  font-size: 12px;
-  white-space: nowrap;
+  max-width: 320px;
+  margin-bottom: 0;
+  min-height: 40px;
 }
 .brand {
   display: inline-flex;
@@ -638,9 +626,9 @@ tr:last-child td { border-bottom: 0; }
   </div>
   <div class="topbar">
     <a class="brand" href="#/">MOGGOFF</a>
-    <div class="handle-search">
+    <div class="search">
+      <span>⌕</span>
       <input id="handleSearchInput" type="text" placeholder="Search @handle">
-      <button class="btn btn-secondary btn-sm" id="handleSearchBtn">Go</button>
     </div>
     <nav class="nav" id="nav"></nav>
   </div>
@@ -1109,10 +1097,17 @@ async function getUserProfile(handle) {
   const user = demo.users.find(item => item.id === uid) || {};
   const listings = demo.candidates
     .filter(item => item.confirmedUid === uid && item.status === "confirmed")
-    .map(item => ({
-      id: item.id, name: item.name, gender: item.gender,
-      institutionId: item.institutionId, institutionName: item.institutionName, score: item.score,
-    }));
+    .map(item => {
+      const peers = demo.candidates
+        .filter(peer => peer.institutionId === item.institutionId && peer.gender === item.gender && peer.status === "confirmed")
+        .sort((a, b) => (b.score || b.upvotes || 0) - (a.score || a.upvotes || 0));
+      const rank = peers.findIndex(peer => peer.id === item.id) + 1;
+      return {
+        id: item.id, name: item.name, gender: item.gender,
+        institutionId: item.institutionId, institutionName: item.institutionName,
+        score: item.score, rank: rank || null,
+      };
+    });
   return {
     profile: {
       handle,
@@ -1878,9 +1873,9 @@ async function renderUserProfile(handle) {
     <div class="eyebrow" style="margin-top:28px">Ranked at</div>
     <div style="margin-top:12px">
       ${listings.length ? listings.map(item => `
-        <a class="listing-chip" href="#/candidate/${item.id}">
-          <span>${esc(item.institutionName || "")} - ${item.gender === "chad" ? "CHAD" : "STACY"}</span>
-          <span class="candidate-meta">score ${item.score || 0}</span>
+        <a class="listing-chip" href="#/institution/${item.institutionId}/${item.gender}">
+          <span>${esc(item.institutionName || "")}</span>
+          <span class="candidate-meta">${item.rank ? `#${item.rank} ${item.gender === "chad" ? "CHAD" : "STACY"}` : (item.gender === "chad" ? "CHAD" : "STACY")}</span>
         </a>`).join("") : `<div class="empty">Not on any boards yet.</div>`}
     </div>
   `;
@@ -2053,7 +2048,6 @@ function goToHandleSearch() {
   input.value = "";
   go(`/u/${handle}`);
 }
-document.getElementById("handleSearchBtn").onclick = goToHandleSearch;
 document.getElementById("handleSearchInput").onkeydown = event => {
   if (event.key === "Enter") goToHandleSearch();
 };

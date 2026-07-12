@@ -363,6 +363,26 @@ router.get('/users/:handle', async (req, res, next) => {
       .where('status', '==', 'confirmed')
       .get();
 
+    const listings = await Promise.all(listingsSnap.docs.map(async (doc) => {
+      const item = serializeDoc(doc);
+      const peersSnap = await db.collection('candidates')
+        .where('institutionId', '==', item.institutionId)
+        .where('gender', '==', item.gender)
+        .where('status', '==', 'confirmed')
+        .orderBy('score', 'desc')
+        .get();
+      const rank = peersSnap.docs.findIndex((peer) => peer.id === item.id) + 1;
+      return {
+        id: item.id,
+        name: item.name,
+        gender: item.gender,
+        institutionId: item.institutionId,
+        institutionName: item.institutionName,
+        score: item.score,
+        rank: rank || null,
+      };
+    }));
+
     res.json({
       profile: {
         handle,
@@ -372,17 +392,7 @@ router.get('/users/:handle', async (req, res, next) => {
         bio: userData.bio || '',
         socialLinks: userData.socialLinks || {},
       },
-      listings: listingsSnap.docs.map((doc) => {
-        const item = serializeDoc(doc);
-        return {
-          id: item.id,
-          name: item.name,
-          gender: item.gender,
-          institutionId: item.institutionId,
-          institutionName: item.institutionName,
-          score: item.score,
-        };
-      }),
+      listings,
     });
   } catch (err) {
     next(err);
