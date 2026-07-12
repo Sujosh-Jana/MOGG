@@ -97,6 +97,24 @@ img { display: block; }
   border-bottom: 1px solid var(--line-soft);
   background: linear-gradient(180deg, #141417, #09090a);
 }
+.handle-search {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex: 1;
+  max-width: 260px;
+}
+.handle-search input {
+  min-height: 34px;
+  padding: 6px 10px;
+  font-size: 13px;
+}
+.handle-search button {
+  min-height: 34px;
+  padding: 6px 12px;
+  font-size: 12px;
+  white-space: nowrap;
+}
 .brand {
   display: inline-flex;
   align-items: center;
@@ -620,6 +638,10 @@ tr:last-child td { border-bottom: 0; }
   </div>
   <div class="topbar">
     <a class="brand" href="#/">MOGGOFF</a>
+    <div class="handle-search">
+      <input id="handleSearchInput" type="text" placeholder="Search @handle">
+      <button class="btn btn-secondary btn-sm" id="handleSearchBtn">Go</button>
+    </div>
     <nav class="nav" id="nav"></nav>
   </div>
   <main id="main"><div class="loading"></div></main>
@@ -1844,8 +1866,7 @@ async function renderUserProfile(handle) {
 
   main.innerHTML = `
     <div class="profile-banner-wrap">
-      <img class="profile-banner" id="bannerImg" src="${profile.bannerURL || ""}" alt="" style="${profile.bannerURL ? "" : "display:none"}">
-      ${profile.bannerURL ? "" : `<div class="profile-banner"></div>`}
+      <img class="profile-banner" id="bannerImg" alt="" ${profile.bannerURL ? `src="${esc(profile.bannerURL)}"` : ""}>
       <img class="profile-avatar-lg" src="${profile.avatarURL || placeholder(profile.displayName || handle)}" alt="">
       ${isOwn ? `<button class="btn btn-secondary btn-sm profile-edit-btn" id="editProfileBtn">Edit profile</button>` : ""}
     </div>
@@ -1903,7 +1924,6 @@ function renderProfileEditor(profile) {
       const photoURL = await uploadBanner(file);
       await updateMyBanner(photoURL);
       document.getElementById("bannerImg").src = photoURL;
-      document.getElementById("bannerImg").style.display = "";
       msg.innerHTML = `<div class="msg ok">Banner updated.</div>`;
     } catch (error) {
       msg.innerHTML = `<div class="msg err">${esc(error.message)}</div>`;
@@ -2025,6 +2045,18 @@ async function loadTicker() {
   const items = top.map((candidate, index) => `<span class="ticker-item"><span class="ticker-rank">#${index + 1}</span><b>${esc(candidate.name)}</b><span class="ticker-score">${candidate.upvotes || 0} UP</span></span>`).join("");
   track.innerHTML = items + items;
 }
+
+function goToHandleSearch() {
+  const input = document.getElementById("handleSearchInput");
+  const handle = input.value.trim().toLowerCase().replace(/^@/, "");
+  if (!handle) return;
+  input.value = "";
+  go(`/u/${handle}`);
+}
+document.getElementById("handleSearchBtn").onclick = goToHandleSearch;
+document.getElementById("handleSearchInput").onkeydown = event => {
+  if (event.key === "Enter") goToHandleSearch();
+};
 
 window.addEventListener("hashchange", router);
 boot();
