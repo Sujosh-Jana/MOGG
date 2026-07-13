@@ -1027,9 +1027,10 @@ function normalizeName(value) {
 }
 
 function cleanUrl(value) {
-  const url = String(value || '').trim();
+  let url = String(value || '').trim();
   if (!url) return null;
   if (url.startsWith('data:image/')) return url;
+  if (!/^[a-zA-Z][a-zA-Z0-9+.-]*:\/\//.test(url)) url = `https://${url}`;
   try {
     const parsed = new URL(url);
     return ['http:', 'https:'].includes(parsed.protocol) ? url : null;
