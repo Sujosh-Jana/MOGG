@@ -628,7 +628,7 @@ tr:last-child td { border-bottom: 0; }
     <a class="brand" href="#/">MOGGOFF</a>
     <div class="search">
       <span>⌕</span>
-      <input id="handleSearchInput" type="text" placeholder="Search @handle">
+      <input id="globalSearch" type="text" placeholder="Search institutions or @handle">
     </div>
     <nav class="nav" id="nav"></nav>
   </div>
@@ -722,6 +722,7 @@ function applyDemoVote(candidateId, institutionId, direction) {
   if (!candidate || candidate.status !== "confirmed") throw new Error("Candidate not found.");
   const voterUid = currentUser.uid;
   const opposite = direction === "up" ? "down" : "up";
+  const originalUpvotes = candidate.upvotes || 0;
   const bump = (id, dir, delta) => {
     const item = demo.candidates.find(c => c.id === id);
     if (!item) return;
@@ -746,6 +747,16 @@ function applyDemoVote(candidateId, institutionId, direction) {
     else demo.votes.push({ id: uid(), candidateId, institutionId, voterUid, direction, updatedAt: Date.now() });
   }
   saveDemo();
+  if (direction === "up" && originalUpvotes === 0 && candidate.upvotes === 1
+    && candidate.confirmedUid && candidate.confirmedUid !== voterUid) {
+    if (!demo.notifications) demo.notifications = [];
+    demo.notifications.push({
+      id: uid(), targetUid: candidate.confirmedUid, type: "first_upvote",
+      message: `You got your first upvote on ${candidate.name}!`,
+      link: `/candidate/${candidateId}`, createdAt: Date.now(),
+    });
+    saveDemo();
+  }
   const active = demo.votes.find(v => v.voterUid === voterUid && v.institutionId === institutionId && v.candidateId === candidateId);
   return {
     candidateId,
@@ -895,7 +906,7 @@ function renderNav() {
     const handle = currentUserDoc?.handle;
     nav.innerHTML = `
       <a href="#/nominate">+ Nominate</a>
-      <a href="#/notifications" id="requestsLink">Notifications</a>
+      <a href="#/requests" id="requestsLink">Notifications</a>
       ${isAdmin() ? `<a href="/ranked-admin.html">Admin</a>` : ""}
       ${handle ? `<a href="#/u/${esc(handle)}">@${esc(handle)}</a>` : `<span>${esc(currentUser.email.split("@")[0])}</span>`}
       <button class="btn btn-secondary btn-sm" id="logoutBtn">Log out</button>
@@ -1069,6 +1080,18 @@ async function getMyRequests() {
     .sort((a, b) => b.createdAt - a.createdAt);
 }
 
+async function getMyNotifications() {
+  if (!currentUser) return [];
+  if (hasFirebaseConfig) {
+    const data = await apiJson("/me/notifications");
+    return data.notifications || [];
+  }
+  return (demo.notifications || [])
+    .filter(item => item.targetUid === currentUser.uid)
+    .sort((a, b) => b.createdAt - a.createdAt)
+    .slice(0, 30);
+}
+
 async function claimHandle(handle) {
   if (hasFirebaseConfig) {
     await apiJson("/me/handle", { method: "POST", body: { handle } });
@@ -1095,6 +1118,8 @@ async function getUserProfile(handle) {
   const uid = demo.handles[handle];
   if (!uid) throw new Error("No account with that handle.");
   const user = demo.users.find(item => item.id === uid) || {};
+  user.profileViews = (user.profileViews || 0) + 1;
+  saveDemo();
   const listings = demo.candidates
     .filter(item => item.confirmedUid === uid && item.status === "confirmed")
     .map(item => {
@@ -1116,6 +1141,7 @@ async function getUserProfile(handle) {
       bannerURL: user.bannerURL || null,
       bio: user.bio || "",
       socialLinks: user.socialLinks || {},
+      views: user.profileViews || 0,
     },
     listings,
   };
@@ -1215,6 +1241,14 @@ async function confirmNomination(nominationId) {
   nomination.candidateId = candidate.id;
   const institution = demo.institutions.find(item => item.id === nomination.institutionId);
   if (institution) institution.candidateCount = (institution.candidateCount || 0) + 1;
+  if (!demo.notifications) demo.notifications = [];
+  if (nomination.nominatorUid && nomination.nominatorUid !== currentUser.uid) {
+    demo.notifications.push({
+      id: uid(), targetUid: nomination.nominatorUid, type: "nomination_confirmed",
+      message: `${candidate.name} accepted your nomination and is now ranked at ${candidate.institutionName || "their institution"}.`,
+      link: `/candidate/${candidate.id}`, createdAt: Date.now(),
+    });
+  }
   saveDemo();
   return candidate;
 }
@@ -1235,6 +1269,8 @@ async function declineNomination(nominationId) {
 async function router() {
   const main = document.getElementById("main");
   main.innerHTML = `<div class="loading"></div>`;
+  const searchEl = document.getElementById("globalSearch");
+  if (searchEl) searchEl.oninput = null;
   const parts = route();
   try {
     // Handles are now the backbone of the nomination system, so anyone
@@ -1242,16 +1278,11 @@ async function router() {
     if (currentUser && !currentUserDoc?.handle && parts[0] !== "handle") {
       return renderChooseHandle();
     }
-    const searchBox = document.getElementById("handleSearchInput");
-    if (searchBox && parts.length) {
-      searchBox.placeholder = "Search @handle";
-      searchBox.oninput = null;
-    }
     if (!parts.length) return renderHome();
     if (parts[0] === "institution" && parts[1]) return renderLeaderboard(parts[1], parts[2] || "chad");
     if (parts[0] === "candidate" && parts[1]) return renderCandidateProfile(parts[1]);
     if (parts[0] === "nominate") return requireAuth(renderNominate);
-    if (parts[0] === "requests" || parts[0] === "notifications") return requireAuth(renderNotifications);
+    if (parts[0] === "requests") return requireAuth(renderRequests);
     if (parts[0] === "u" && parts[1]) return renderUserProfile(parts[1]);
     if (parts[0] === "handle") return requireAuth(renderChooseHandle);
     if (parts[0] === "login") return renderLogin();
@@ -1295,10 +1326,8 @@ async function renderHome() {
     <div class="institution-list" id="institutionList"></div>
     <p class="footer-note">FOR ENTERTAINMENT LOL</p>
   `;
-  const searchInput = document.getElementById("handleSearchInput");
-  searchInput.placeholder = "Search users or institutions";
   const draw = () => {
-    const term = searchInput.value.trim().toLowerCase().replace(/^@/, "");
+    const term = document.getElementById("globalSearch").value.trim().toLowerCase();
     const rows = institutions.filter(item => {
       return (homeType === "all" || item.type === homeType) && item.name.toLowerCase().includes(term);
     });
@@ -1312,7 +1341,7 @@ async function renderHome() {
       </a>
     `).join("") : `<div class="empty">No institutions found. More colleges, universities, and companies are added by the team.</div>`;
   };
-  searchInput.oninput = draw;
+  document.getElementById("globalSearch").oninput = draw;
   document.querySelectorAll(".tab").forEach(tab => {
     tab.onclick = () => {
       document.querySelectorAll(".tab").forEach(item => item.classList.remove("active"));
@@ -1802,32 +1831,38 @@ function renderChooseHandle() {
   };
 }
 
-let notificationsTab = "requests";
-async function renderNotifications() {
+let notificationsSubTab = "general";
+
+async function renderRequests() {
   const main = document.getElementById("main");
-  const requests = await getMyRequests();
-  pendingRequestCount = requests.length;
   main.innerHTML = `
-    <div class="eyebrow">Inbox</div>
+    <div class="eyebrow">Notifications</div>
     <h1>Notifications</h1>
-    <div class="tabs">
-      <button class="tab" data-notif="general">General</button>
-      <button class="tab" data-notif="requests">Requests${requests.length ? ` (${requests.length})` : ""}</button>
+    <div class="tabs" style="margin-top:16px">
+      <button class="tab ${notificationsSubTab === "general" ? "active" : ""}" data-notif-tab="general">General</button>
+      <button class="tab ${notificationsSubTab === "requests" ? "active" : ""}" data-notif-tab="requests">Requests</button>
     </div>
-    <div id="notificationsBody"></div>
+    <div id="notifBody" style="margin-top:16px"></div>
   `;
-  const body = document.getElementById("notificationsBody");
-  const draw = () => {
-    document.querySelectorAll("[data-notif]").forEach(button => {
-      button.classList.toggle("active", button.dataset.notif === notificationsTab);
-    });
-    if (notificationsTab === "general") {
-      body.innerHTML = `<div class="empty">Nothing new yet. Overtakes, upvotes, and other activity will show up here.</div>`;
-      return;
-    }
+  document.querySelectorAll("[data-notif-tab]").forEach(button => {
+    button.onclick = () => {
+      notificationsSubTab = button.dataset.notifTab;
+      document.querySelectorAll("[data-notif-tab]").forEach(item => item.classList.toggle("active", item === button));
+      drawNotifBody();
+    };
+  });
+  await drawNotifBody();
+}
+
+async function drawNotifBody() {
+  const body = document.getElementById("notifBody");
+  body.innerHTML = `<div class="loading"></div>`;
+  if (notificationsSubTab === "requests") {
+    const requests = await getMyRequests();
+    pendingRequestCount = requests.length;
     body.innerHTML = `
       <p class="sub">People who nominated @${esc(currentUserDoc?.handle || "")}. Nothing goes public until you accept.</p>
-      <div id="requestsList">${requests.length ? requests.map(requestCard).join("") : `<div class="empty">No pending requests right now.</div>`}</div>
+      ${requests.length ? requests.map(requestCard).join("") : `<div class="empty">No pending requests right now.</div>`}
     `;
     document.querySelectorAll("[data-accept]").forEach(button => {
       button.onclick = () => respondToRequest(button.dataset.accept, "accept");
@@ -1835,11 +1870,14 @@ async function renderNotifications() {
     document.querySelectorAll("[data-decline]").forEach(button => {
       button.onclick = () => respondToRequest(button.dataset.decline, "decline");
     });
-  };
-  document.querySelectorAll("[data-notif]").forEach(button => {
-    button.onclick = () => { notificationsTab = button.dataset.notif; draw(); };
-  });
-  draw();
+    return;
+  }
+  const notifications = await getMyNotifications();
+  body.innerHTML = notifications.length ? notifications.map(item => `
+    <a class="listing-chip" href="#${item.link || "/"}">
+      <span>${esc(item.message)}</span>
+    </a>
+  `).join("") : `<div class="empty">No notifications yet.</div>`;
 }
 
 function requestCard(nomination) {
@@ -1865,10 +1903,88 @@ async function respondToRequest(nominationId, action) {
     }
     await declineNomination(nominationId);
     showToast("Declined.", "ok");
-    renderNotifications();
+    renderRequests();
   } catch (error) {
     showToast(error.message || "Something went wrong.", "err");
   }
+}
+
+async function shareProfileCard(profile, handle, listings) {
+  const canvas = document.createElement("canvas");
+  canvas.width = 1080;
+  canvas.height = 1080;
+  const ctx = canvas.getContext("2d");
+  const W = canvas.width, H = canvas.height;
+
+  const bgGrad = ctx.createLinearGradient(0, 0, 0, H);
+  bgGrad.addColorStop(0, "#121216");
+  bgGrad.addColorStop(1, "#09090a");
+  ctx.fillStyle = bgGrad;
+  ctx.fillRect(0, 0, W, H);
+
+  const banner = profile.bannerURL ? await loadImageSafe(profile.bannerURL) : null;
+  const bannerH = 340;
+  if (banner) {
+    const scale = Math.max(W / banner.width, bannerH / banner.height);
+    const w = banner.width * scale, h = banner.height * scale;
+    ctx.save();
+    ctx.beginPath();
+    ctx.rect(0, 0, W, bannerH);
+    ctx.clip();
+    ctx.drawImage(banner, (W - w) / 2, (bannerH - h) / 2, w, h);
+    ctx.restore();
+  }
+
+  ctx.fillStyle = "#f0b429";
+  ctx.font = "bold 30px Arial";
+  ctx.fillText("MOGGOFF", 48, bannerH + 70);
+
+  const photo = await loadImageSafe(profile.avatarURL || placeholder(profile.displayName || handle));
+  const cx = W / 2, cy = bannerH, radius = 130;
+  ctx.save();
+  ctx.beginPath();
+  ctx.arc(cx, cy, radius, 0, Math.PI * 2);
+  ctx.closePath();
+  ctx.clip();
+  if (photo) {
+    const scale = Math.max((radius * 2) / photo.width, (radius * 2) / photo.height);
+    const w = photo.width * scale, h = photo.height * scale;
+    ctx.drawImage(photo, cx - w / 2, cy - h / 2, w, h);
+  } else {
+    ctx.fillStyle = "#1b1b21";
+    ctx.fillRect(cx - radius, cy - radius, radius * 2, radius * 2);
+  }
+  ctx.restore();
+  ctx.beginPath();
+  ctx.arc(cx, cy, radius, 0, Math.PI * 2);
+  ctx.strokeStyle = "#09090a";
+  ctx.lineWidth = 10;
+  ctx.stroke();
+
+  ctx.textAlign = "center";
+  ctx.fillStyle = "#f1f1ef";
+  ctx.font = "bold 46px Arial";
+  ctx.fillText(profile.displayName || `@${handle}`, cx, bannerH + 220);
+
+  ctx.fillStyle = "#96969f";
+  ctx.font = "26px Arial";
+  ctx.fillText(`@${handle}`, cx, bannerH + 262);
+
+  const topListing = listings.reduce((best, item) => (item.rank && (!best || item.rank < best.rank) ? item : best), null);
+  ctx.fillStyle = "#f0b429";
+  ctx.font = "bold 56px Arial";
+  ctx.fillText(topListing ? `#${topListing.rank} ${topListing.gender === "chad" ? "CHAD" : "STACY"}` : "ON MOGGOFF", cx, bannerH + 350);
+
+  ctx.fillStyle = "#7dd3fc";
+  ctx.font = "24px Arial";
+  ctx.fillText(topListing ? (topListing.institutionName || "") : `${listings.length} board${listings.length === 1 ? "" : "s"}`, cx, bannerH + 392);
+
+  ctx.textAlign = "left";
+  const dataUrl = canvas.toDataURL("image/png");
+  const link = document.createElement("a");
+  link.href = dataUrl;
+  link.download = `${handle}-moggoff-profile.png`;
+  link.click();
 }
 
 async function renderUserProfile(handle) {
@@ -1894,9 +2010,10 @@ async function renderUserProfile(handle) {
       ${isOwn ? `<button class="btn btn-secondary btn-sm profile-edit-btn" id="editProfileBtn">Edit profile</button>` : ""}
     </div>
     <h1 style="margin:0 0 2px">${esc(profile.displayName || `@${handle}`)}</h1>
-    <p class="sub" style="margin:0">@${esc(handle)}</p>
+    <p class="sub" style="margin:0">@${esc(handle)} - ${(profile.views || 0).toLocaleString()} total views</p>
     ${profile.bio ? `<p class="sub" style="margin:14px 0">${esc(profile.bio)}</p>` : ""}
     ${links ? `<div class="social-row">${links}</div>` : ""}
+    <button class="btn btn-secondary btn-sm" id="shareProfileBtn" style="margin-top:14px">Share profile card</button>
     <div id="profileEditorHost"></div>
     <div class="eyebrow" style="margin-top:28px">Ranked at</div>
     <div style="margin-top:12px">
@@ -1907,6 +2024,8 @@ async function renderUserProfile(handle) {
         </a>`).join("") : `<div class="empty">Not on any boards yet.</div>`}
     </div>
   `;
+
+  document.getElementById("shareProfileBtn").onclick = () => shareProfileCard(profile, handle, listings);
 
   if (isOwn) {
     document.getElementById("editProfileBtn").onclick = () => renderProfileEditor(profile);
@@ -1932,7 +2051,7 @@ function renderProfileEditor(profile) {
       <div class="field"><label>Display name</label><input id="profileDisplayName" type="text" maxlength="90" placeholder="Shown above your handle" value="${esc(profile.displayName || "")}"></div>
       <div class="field"><label>Bio (max 280 characters)</label><textarea id="profileBio" rows="3" maxlength="280">${esc(profile.bio || "")}</textarea></div>
       ${Object.entries(SOCIAL_META).map(([key, meta]) => `
-        <div class="field"><label>${meta.label}</label><input id="social_${key}" type="text" placeholder="https://..." value="${esc(profile.socialLinks?.[key] || "")}"></div>
+        <div class="field"><label>${meta.label}</label><input id="social_${key}" type="url" placeholder="https://..." value="${esc(profile.socialLinks?.[key] || "")}"></div>
       `).join("")}
       <button class="btn" id="profileSaveBtn" style="width:100%">Save profile</button>
     </div>
@@ -2069,15 +2188,36 @@ async function loadTicker() {
   track.innerHTML = items + items;
 }
 
-function goToHandleSearch() {
-  const input = document.getElementById("handleSearchInput");
-  const handle = input.value.trim().toLowerCase().replace(/^@/, "");
-  if (!handle) return;
-  input.value = "";
-  go(`/u/${handle}`);
+async function performGlobalSearch(rawTerm) {
+  const term = rawTerm.trim();
+  if (!term) return;
+  const handleGuess = term.toLowerCase().replace(/^@/, "");
+  // Handles never contain spaces - if it looks like one, try it first.
+  if (/^[a-z0-9_]+$/i.test(handleGuess)) {
+    try {
+      if (hasFirebaseConfig) await apiJson(`/handles/${encodeURIComponent(handleGuess)}`);
+      else if (!demo.handles[handleGuess]) throw new Error("not found");
+      go(`/u/${handleGuess}`);
+      return;
+    } catch {
+      // Not a handle - fall through and try institutions instead.
+    }
+  }
+  const institutions = await getInstitutions(false);
+  const match = institutions.find(item => item.name.toLowerCase().includes(term.toLowerCase()));
+  if (match) {
+    go(`/institution/${match.id}/chad`);
+    return;
+  }
+  showToast("No matching institution or user found.", "err");
 }
-document.getElementById("handleSearchInput").onkeydown = event => {
-  if (event.key === "Enter") goToHandleSearch();
+
+document.getElementById("globalSearch").onkeydown = event => {
+  if (event.key !== "Enter") return;
+  const input = event.target;
+  const value = input.value;
+  input.value = "";
+  performGlobalSearch(value);
 };
 
 window.addEventListener("hashchange", router);

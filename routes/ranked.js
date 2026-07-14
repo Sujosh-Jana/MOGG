@@ -134,6 +134,7 @@ router.post('/votes', authMiddleware, voteLimiter, async (req, res, next) => {
       // Collect every OTHER candidate doc we might need to adjust, reading
       // them all before any writes (Firestore transactions require reads
       // before writes).
+      const originalUpvotes = Number(candidateSnap.data()?.upvotes || 0);
       const candidates = new Map([[candidateId, { ref: candidateRef, data: { ...candidateSnap.data() } }]]);
       const otherIdsToLoad = new Set();
       if (sameSlot?.candidateId && sameSlot.candidateId !== candidateId) otherIdsToLoad.add(sameSlot.candidateId);
@@ -197,10 +198,25 @@ router.post('/votes', authMiddleware, voteLimiter, async (req, res, next) => {
         upvotes: finalCandidate.upvotes,
         downvotes: finalCandidate.downvotes,
         score: finalCandidate.upvotes - finalCandidate.downvotes,
+        originalUpvotes,
+        confirmedUid: finalCandidate.confirmedUid,
+        candidateName: finalCandidate.name,
       };
     });
 
-    res.json(result);
+    if (result.direction === 'up' && result.originalUpvotes === 0 && result.upvotes === 1
+      && result.confirmedUid && result.confirmedUid !== req.user.uid) {
+      await db.collection('notifications').add({
+        targetUid: result.confirmedUid,
+        type: 'first_upvote',
+        message: `You got your first upvote on ${result.candidateName}!`,
+        link: `/candidate/${result.candidateId}`,
+        createdAt: FieldValue.serverTimestamp(),
+      });
+    }
+
+    const { originalUpvotes, confirmedUid, candidateName, ...publicResult } = result;
+    res.json(publicResult);
   } catch (err) {
     next(err);
   }
@@ -356,8 +372,10 @@ router.get('/users/:handle', async (req, res, next) => {
     const handleSnap = await db.collection('handles').doc(handle).get();
     if (!handleSnap.exists) return res.status(404).json({ error: 'No account with that handle.' });
     const uid = handleSnap.data().uid;
-    const userSnap = await db.collection('users').doc(uid).get();
+    const userRef = db.collection('users').doc(uid);
+    const userSnap = await userRef.get();
     const userData = userSnap.exists ? userSnap.data() || {} : {};
+    userRef.set({ profileViews: FieldValue.increment(1) }, { merge: true }).catch(() => {});
     const listingsSnap = await db.collection('candidates')
       .where('confirmedUid', '==', uid)
       .where('status', '==', 'confirmed')
@@ -391,6 +409,7 @@ router.get('/users/:handle', async (req, res, next) => {
         bannerURL: userData.bannerURL || null,
         bio: userData.bio || '',
         socialLinks: userData.socialLinks || {},
+        views: (userData.profileViews || 0) + 1,
       },
       listings,
     });
@@ -406,11 +425,22 @@ router.patch('/me/profile', authMiddleware, async (req, res, next) => {
     if (typeof body.displayName === 'string') patch.displayName = cleanName(body.displayName) || null;
     if (typeof body.bio === 'string') patch.bio = body.bio.trim().slice(0, 280);
     if (body.socialLinks && typeof body.socialLinks === 'object') {
+      const userRef = db.collection('users').doc(req.user.uid);
+      const existingSnap = await userRef.get();
+      const merged = { ...((existingSnap.exists && existingSnap.data()?.socialLinks) || {}) };
       for (const field of SOCIAL_FIELDS) {
         if (!Object.prototype.hasOwnProperty.call(body.socialLinks, field)) continue;
         const raw = String(body.socialLinks[field] || '').trim();
-        patch[`socialLinks.${field}`] = raw ? (cleanUrl(raw) || null) : null;
+        if (raw) {
+          const withProtocol = /^https?:\/\//i.test(raw) ? raw : `https://${raw}`;
+          const cleaned = cleanUrl(withProtocol);
+          if (cleaned) merged[field] = cleaned;
+          else delete merged[field];
+        } else {
+          delete merged[field];
+        }
       }
+      patch.socialLinks = merged;
     }
     await db.collection('users').doc(req.user.uid).set(patch, { merge: true });
     await db.collection('ranked_audit').add(buildAudit('profile_updated', req.user, {}));
@@ -443,6 +473,19 @@ router.patch('/me/banner', authMiddleware, async (req, res, next) => {
 });
 
 // ── Nomination requests (inbox for the person who was nominated) ─────────
+router.get('/me/notifications', authMiddleware, async (req, res, next) => {
+  try {
+    const snap = await db.collection('notifications')
+      .where('targetUid', '==', req.user.uid)
+      .orderBy('createdAt', 'desc')
+      .limit(30)
+      .get();
+    res.json({ notifications: snap.docs.map(serializeDoc) });
+  } catch (err) {
+    next(err);
+  }
+});
+
 router.get('/me/requests', authMiddleware, async (req, res, next) => {
   try {
     const snap = await db.collection('nominations')
@@ -510,10 +553,21 @@ router.post('/nominations/:id/confirm', authMiddleware, async (req, res, next) =
         candidateId: candidateRef.id,
       }));
 
-      return { id: candidateRef.id, ...candidate };
+      return { id: candidateRef.id, ...candidate, nominatorUid: nomination.nominatorUid };
     });
 
-    res.status(201).json({ candidate: result });
+    const { nominatorUid, ...candidate } = result;
+    if (nominatorUid && nominatorUid !== req.user.uid) {
+      await db.collection('notifications').add({
+        targetUid: nominatorUid,
+        type: 'nomination_confirmed',
+        message: `${candidate.name} accepted your nomination and is now ranked at ${candidate.institutionName || 'their institution'}.`,
+        link: `/candidate/${candidate.id}`,
+        createdAt: FieldValue.serverTimestamp(),
+      });
+    }
+
+    res.status(201).json({ candidate });
   } catch (err) {
     next(err);
   }
@@ -1027,10 +1081,9 @@ function normalizeName(value) {
 }
 
 function cleanUrl(value) {
-  let url = String(value || '').trim();
+  const url = String(value || '').trim();
   if (!url) return null;
   if (url.startsWith('data:image/')) return url;
-  if (!/^[a-zA-Z][a-zA-Z0-9+.-]*:\/\//.test(url)) url = `https://${url}`;
   try {
     const parsed = new URL(url);
     return ['http:', 'https:'].includes(parsed.protocol) ? url : null;
