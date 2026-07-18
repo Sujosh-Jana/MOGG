@@ -339,6 +339,7 @@ function renderShell() {
           <button data-tab="institutions">Institutions</button>
           <button data-tab="nominations">Nominations</button>
           <button data-tab="candidates">Candidates</button>
+          <button data-tab="cosmetics">Cosmetics</button>
           <button data-tab="audit">Audit log</button>
           <a href="/ranked.html">Public site</a>
           <button id="logout">Log out</button>
@@ -390,6 +391,7 @@ async function loadTab() {
     if (activeTab === "institutions") return renderInstitutions();
     if (activeTab === "nominations") return renderNominations();
     if (activeTab === "candidates") return renderCandidates();
+    if (activeTab === "cosmetics") return renderCosmetics();
     if (activeTab === "audit") return renderAudit();
   } catch (error) {
     renderError(error);
@@ -653,6 +655,56 @@ async function renderCandidates() {
       document.getElementById("candidateMsg").innerHTML = `<div class="msg err">${esc(error.message)}</div>`;
     }
   });
+}
+
+const COSMETICS_CATALOG = [
+  { id: "nameplate-gold-shimmer", type: "nameplate", name: "Gold Shimmer" },
+  { id: "nameplate-neon-violet", type: "nameplate", name: "Neon Violet" },
+  { id: "nameplate-midnight-frost", type: "nameplate", name: "Midnight Frost" },
+  { id: "frame-flame", type: "frame", name: "Flame Ring" },
+  { id: "frame-royal", type: "frame", name: "Royal Gold" },
+  { id: "frame-glacier", type: "frame", name: "Glacier Ring" },
+  { id: "badge-verified-gold", type: "badge", name: "Gold Star" },
+  { id: "badge-crown", type: "badge", name: "Crown" },
+];
+
+async function renderCosmetics() {
+  setHeader("Cosmetics", "Grant a cosmetic after you've been paid directly - no payment processor wired up.");
+  document.getElementById("view").innerHTML = `
+    <div class="msg notice">Buyers email blackcrowninteractive@gmail.com. Once paid, grant the item to their handle here.</div>
+    <div id="cosmeticsMsg"></div>
+    <div style="display:flex;gap:10px;flex-wrap:wrap;align-items:center">
+      <input id="cosmeticsHandle" placeholder="Their handle (no @)" style="flex:1;min-width:160px">
+      <select id="cosmeticsPick">${COSMETICS_CATALOG.map(item => `<option value="${item.id}">${item.name} (${item.type})</option>`).join("")}</select>
+      <button class="btn" id="grantCosmeticBtn">Grant</button>
+      <button class="btn danger" id="revokeCosmeticBtn">Revoke</button>
+    </div>
+  `;
+  const msg = document.getElementById("cosmeticsMsg");
+  const act = async (action) => {
+    const handle = document.getElementById("cosmeticsHandle").value.trim().toLowerCase().replace(/^@/, "");
+    const cosmeticId = document.getElementById("cosmeticsPick").value;
+    if (!handle) { msg.innerHTML = `<div class="msg err">Enter a handle.</div>`; return; }
+    try {
+      if (useFirebase) {
+        await apiJson(`/admin/cosmetics/${action}`, { method: "POST", body: { handle, cosmeticId } });
+      } else {
+        const uid = demo.handles?.[handle];
+        if (!uid) throw new Error("No account with that handle.");
+        const user = demo.users.find(item => item.id === uid);
+        user.cosmetics = user.cosmetics || { owned: [], equipped: {} };
+        const owned = new Set(user.cosmetics.owned || []);
+        if (action === "grant") owned.add(cosmeticId); else owned.delete(cosmeticId);
+        user.cosmetics.owned = [...owned];
+        saveDemo();
+      }
+      msg.innerHTML = `<div class="msg ok">${action === "grant" ? "Granted" : "Revoked"} ${cosmeticId} for @${esc(handle)}.</div>`;
+    } catch (error) {
+      msg.innerHTML = `<div class="msg err">${esc(error.message)}</div>`;
+    }
+  };
+  document.getElementById("grantCosmeticBtn").onclick = () => act("grant");
+  document.getElementById("revokeCosmeticBtn").onclick = () => act("revoke");
 }
 
 async function renderAudit() {

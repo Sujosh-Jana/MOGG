@@ -388,6 +388,38 @@ h1 {
   margin-bottom: 10px;
 }
 .listing-chip:hover { border-color: #3a3a45; }
+
+/* Cosmetics - manually granted, see admin panel */
+.cosmetic-nameplate-gold-shimmer, .cosmetic-nameplate-neon-violet, .cosmetic-nameplate-midnight-frost {
+  display: inline-block;
+  padding: 6px 16px;
+  border-radius: 10px;
+  background-size: 200% 200%;
+  animation: cosmeticShimmer 3s ease infinite;
+}
+.cosmetic-nameplate-gold-shimmer { background-image: linear-gradient(120deg, #7a5a12, #f0b429, #7a5a12); }
+.cosmetic-nameplate-neon-violet { background-image: linear-gradient(120deg, #4c1d95, #d946ef, #4c1d95); }
+.cosmetic-nameplate-midnight-frost { background-image: linear-gradient(120deg, #0c4a6e, #7dd3fc, #0c4a6e); }
+@keyframes cosmeticShimmer {
+  0% { background-position: 0% 50%; }
+  50% { background-position: 100% 50%; }
+  100% { background-position: 0% 50%; }
+}
+.cosmetic-frame-flame, .cosmetic-frame-royal, .cosmetic-frame-glacier {
+  padding: 4px;
+  background-size: 300% 300%;
+  animation: cosmeticShimmer 4s linear infinite;
+}
+.cosmetic-frame-flame { background-image: conic-gradient(from 0deg, #f97316, #f0b429, #f97316); }
+.cosmetic-frame-royal { background-image: conic-gradient(from 0deg, #f0b429, #7c3aed, #f0b429); }
+.cosmetic-frame-glacier { background-image: conic-gradient(from 0deg, #7dd3fc, #38bdf8, #7dd3fc); }
+.cosmetic-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  font-size: 18px;
+  vertical-align: middle;
+}
 .candidate-name {
   overflow: hidden;
   text-overflow: ellipsis;
@@ -699,6 +731,7 @@ function loadDemo() {
     if (user.bannerURL === undefined) user.bannerURL = null;
     if (user.bio === undefined) user.bio = "";
     if (!user.socialLinks) user.socialLinks = {};
+    if (!user.cosmetics) user.cosmetics = { owned: [], equipped: {} };
   });
   (data.nominations || []).forEach(nomination => {
     if (nomination.targetUid === undefined) nomination.targetUid = null;
@@ -906,6 +939,7 @@ function renderNav() {
     const handle = currentUserDoc?.handle;
     nav.innerHTML = `
       <a href="#/nominate">+ Nominate</a>
+      <a href="#/shop">Shop</a>
       <a href="#/requests" id="requestsLink">Notifications</a>
       ${isAdmin() ? `<a href="/ranked-admin.html">Admin</a>` : ""}
       ${handle ? `<a href="#/u/${esc(handle)}">@${esc(handle)}</a>` : `<span>${esc(currentUser.email.split("@")[0])}</span>`}
@@ -914,7 +948,7 @@ function renderNav() {
     document.getElementById("logoutBtn").onclick = logout;
     refreshPendingRequestCount();
   } else {
-    nav.innerHTML = `<a href="#/login">Log in</a><a class="btn btn-sm" href="#/signup">Sign up</a>`;
+    nav.innerHTML = `<a href="#/shop">Shop</a><a href="#/login">Log in</a><a class="btn btn-sm" href="#/signup">Sign up</a>`;
   }
 }
 
@@ -1021,6 +1055,7 @@ function attachOwnerProfilesDemo(list) {
       socialLinks: (user.socialLinks && Object.keys(user.socialLinks).length) ? user.socialLinks : (item.socialLinks || {}),
       displayName: user.displayName || null,
       ownerHandle: user.handle || null,
+      cosmetics: user.cosmetics || { owned: [], equipped: {} },
     };
   });
 }
@@ -1142,6 +1177,7 @@ async function getUserProfile(handle) {
       bio: user.bio || "",
       socialLinks: user.socialLinks || {},
       views: user.profileViews || 0,
+      cosmetics: user.cosmetics || { owned: [], equipped: {} },
     },
     listings,
   };
@@ -1186,6 +1222,26 @@ async function updateMyBanner(photoURL) {
   const user = demo.users.find(item => item.id === currentUser.uid);
   if (!user) throw new Error("Account not found.");
   user.bannerURL = photoURL;
+  saveDemo();
+}
+
+async function updateMyCosmetics(equipped) {
+  if (hasFirebaseConfig) {
+    await apiJson("/me/cosmetics", { method: "PATCH", body: { equipped } });
+    return;
+  }
+  const user = demo.users.find(item => item.id === currentUser.uid);
+  if (!user) throw new Error("Account not found.");
+  user.cosmetics = user.cosmetics || { owned: [], equipped: {} };
+  const owned = new Set(user.cosmetics.owned || []);
+  for (const slot of ["nameplate", "frame", "badge"]) {
+    if (!Object.prototype.hasOwnProperty.call(equipped, slot)) continue;
+    const value = equipped[slot];
+    if (!value) { user.cosmetics.equipped[slot] = null; continue; }
+    const item = CATALOG_BY_ID.get(value);
+    if (!item || item.type !== slot || !owned.has(value)) throw new Error(`You don't own that ${slot}.`);
+    user.cosmetics.equipped[slot] = value;
+  }
   saveDemo();
 }
 
@@ -1285,6 +1341,7 @@ async function router() {
     if (parts[0] === "requests") return requireAuth(renderRequests);
     if (parts[0] === "u" && parts[1]) return renderUserProfile(parts[1]);
     if (parts[0] === "handle") return requireAuth(renderChooseHandle);
+    if (parts[0] === "shop") return renderShop();
     if (parts[0] === "login") return renderLogin();
     if (parts[0] === "signup") return renderSignup();
     if (parts[0] === "admin") {
@@ -1440,6 +1497,22 @@ const SOCIAL_META = {
   website: { label: "Website", icon: "🔗" },
 };
 
+// Manually-sold cosmetics: no payment processor - people email
+// blackcrowninteractive@gmail.com, pay directly, and the admin grants the
+// item to their handle from the admin panel. Keep in sync with the
+// COSMETICS_CATALOG constant in routes/ranked.js.
+const CATALOG = [
+  { id: "nameplate-gold-shimmer", type: "nameplate", name: "Gold Shimmer", css: "cosmetic-nameplate-gold-shimmer" },
+  { id: "nameplate-neon-violet", type: "nameplate", name: "Neon Violet", css: "cosmetic-nameplate-neon-violet" },
+  { id: "nameplate-midnight-frost", type: "nameplate", name: "Midnight Frost", css: "cosmetic-nameplate-midnight-frost" },
+  { id: "frame-flame", type: "frame", name: "Flame Ring", css: "cosmetic-frame-flame" },
+  { id: "frame-royal", type: "frame", name: "Royal Gold", css: "cosmetic-frame-royal" },
+  { id: "frame-glacier", type: "frame", name: "Glacier Ring", css: "cosmetic-frame-glacier" },
+  { id: "badge-verified-gold", type: "badge", name: "Gold Star", icon: "⭐" },
+  { id: "badge-crown", type: "badge", name: "Crown", icon: "👑" },
+];
+const CATALOG_BY_ID = new Map(CATALOG.map(item => [item.id, item]));
+
 async function renderCandidateProfile(id) {
   const main = document.getElementById("main");
   let result;
@@ -1473,9 +1546,12 @@ async function renderCandidateProfile(id) {
   main.innerHTML = `
     <div class="breadcrumb"><a href="#/institution/${candidate.institutionId}/${candidate.gender}">${esc(candidate.institutionName || "Leaderboard")}</a> / ${esc(candidate.name)}</div>
     <div class="profile-head">
-      <img class="avatar" style="width:96px;height:96px" src="${candidate.photoURL || placeholder(candidate.name)}" alt="">
+      <img class="avatar ${candidate.cosmetics?.equipped?.frame ? CATALOG_BY_ID.get(candidate.cosmetics.equipped.frame)?.css || "" : ""}" style="width:96px;height:96px" src="${candidate.photoURL || placeholder(candidate.name)}" alt="">
       <div>
-        <h1 style="margin:0 0 4px">${candidate.ownerHandle ? `<a class="link" style="color:inherit" href="#/u/${esc(candidate.ownerHandle)}">${esc(candidate.name)}</a>` : esc(candidate.name)}</h1>
+        <h1 style="margin:0 0 4px">
+          <span class="${candidate.cosmetics?.equipped?.nameplate ? CATALOG_BY_ID.get(candidate.cosmetics.equipped.nameplate)?.css || "" : ""}">${candidate.ownerHandle ? `<a class="link" style="color:inherit" href="#/u/${esc(candidate.ownerHandle)}">${esc(candidate.name)}</a>` : esc(candidate.name)}</span>
+          ${candidate.cosmetics?.equipped?.badge ? `<span class="cosmetic-badge">${CATALOG_BY_ID.get(candidate.cosmetics.equipped.badge)?.icon || ""}</span>` : ""}
+        </h1>
         <p class="sub" style="margin:0">${rank ? `#${rank}${totalConfirmed ? ` of ${totalConfirmed}` : ""} ${candidate.gender === "chad" ? "CHAD" : "STACY"} at ${esc(candidate.institutionName || "")}` : esc(candidate.institutionName || "")}</p>
         <p class="candidate-meta" style="margin-top:6px">On MOGGOFF since ${formatJoinedDate(candidate.createdAt)}</p>
       </div>
@@ -1833,6 +1909,29 @@ function renderChooseHandle() {
 
 let notificationsSubTab = "general";
 
+function renderShop() {
+  const main = document.getElementById("main");
+  const groups = { nameplate: "Nameplates", frame: "Avatar Frames", badge: "Badges" };
+  main.innerHTML = `
+    <div class="eyebrow">MOGGOFF Gold</div>
+    <h1>Cosmetics shop</h1>
+    <p class="sub">No card details needed here - email <b>blackcrowninteractive@gmail.com</b> with your <b>@handle</b> and which item you want. Once you've paid, it gets granted to your account by hand.</p>
+    ${Object.entries(groups).map(([type, label]) => `
+      <div class="eyebrow" style="margin-top:24px">${label}</div>
+      <div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(150px,1fr));gap:12px;margin-top:10px">
+        ${CATALOG.filter(item => item.type === type).map(item => `
+          <div class="card" style="text-align:center">
+            ${type === "badge"
+              ? `<div style="font-size:40px;margin-bottom:8px">${item.icon}</div>`
+              : `<div class="${item.css}" style="height:44px;border-radius:10px;margin-bottom:8px"></div>`}
+            <div style="font-weight:700">${esc(item.name)}</div>
+          </div>
+        `).join("")}
+      </div>
+    `).join("")}
+  `;
+}
+
 async function renderRequests() {
   const main = document.getElementById("main");
   main.innerHTML = `
@@ -2003,18 +2102,50 @@ async function renderUserProfile(handle) {
     .map(([key, meta]) => `<a class="social-pill" href="${esc(profile.socialLinks[key])}" target="_blank" rel="noopener">${meta.icon} ${meta.label}</a>`)
     .join("");
 
+  const owned = profile.cosmetics?.owned || [];
+  const equipped = profile.cosmetics?.equipped || {};
+  const frameItem = equipped.frame ? CATALOG_BY_ID.get(equipped.frame) : null;
+  const nameplateItem = equipped.nameplate ? CATALOG_BY_ID.get(equipped.nameplate) : null;
+  const badgeItem = equipped.badge ? CATALOG_BY_ID.get(equipped.badge) : null;
+
   main.innerHTML = `
     <div class="profile-banner-wrap">
       <img class="profile-banner" id="bannerImg" alt="" ${profile.bannerURL ? `src="${esc(profile.bannerURL)}"` : ""}>
-      <img class="profile-avatar-lg" src="${profile.avatarURL || placeholder(profile.displayName || handle)}" alt="">
+      <img class="profile-avatar-lg ${frameItem ? frameItem.css : ""}" src="${profile.avatarURL || placeholder(profile.displayName || handle)}" alt="">
       ${isOwn ? `<button class="btn btn-secondary btn-sm profile-edit-btn" id="editProfileBtn">Edit profile</button>` : ""}
     </div>
-    <h1 style="margin:0 0 2px">${esc(profile.displayName || `@${handle}`)}</h1>
+    <h1 style="margin:0 0 2px">
+      <span class="${nameplateItem ? nameplateItem.css : ""}">${esc(profile.displayName || `@${handle}`)}</span>
+      ${badgeItem ? `<span class="cosmetic-badge" title="${esc(badgeItem.name)}">${badgeItem.icon}</span>` : ""}
+    </h1>
     <p class="sub" style="margin:0">@${esc(handle)} - ${(profile.views || 0).toLocaleString()} total views</p>
     ${profile.bio ? `<p class="sub" style="margin:14px 0">${esc(profile.bio)}</p>` : ""}
     ${links ? `<div class="social-row">${links}</div>` : ""}
-    <button class="btn btn-secondary btn-sm" id="shareProfileBtn" style="margin-top:14px">Share profile card</button>
+    <div style="display:flex;gap:10px;flex-wrap:wrap;margin-top:14px">
+      <button class="btn btn-secondary btn-sm" id="shareProfileBtn">Share profile card</button>
+      <a class="btn btn-secondary btn-sm" href="#/shop">Cosmetics shop</a>
+    </div>
     <div id="profileEditorHost"></div>
+    ${isOwn && owned.length ? `
+      <div class="card" style="margin-top:16px">
+        <div class="eyebrow">Your cosmetics</div>
+        <p class="sub">Pick what's equipped. Get more from the <a class="link" href="#/shop">shop</a>.</p>
+        ${["nameplate", "frame", "badge"].map(slot => {
+          const options = owned.map(id => CATALOG_BY_ID.get(id)).filter(item => item && item.type === slot);
+          if (!options.length) return "";
+          return `
+            <div class="field">
+              <label>${slot.charAt(0).toUpperCase() + slot.slice(1)}</label>
+              <select data-equip-slot="${slot}">
+                <option value="">None</option>
+                ${options.map(item => `<option value="${item.id}" ${equipped[slot] === item.id ? "selected" : ""}>${esc(item.name)}</option>`).join("")}
+              </select>
+            </div>`;
+        }).join("")}
+        <button class="btn" id="saveCosmeticsBtn" style="width:100%">Save cosmetics</button>
+        <div id="cosmeticsMsg"></div>
+      </div>
+    ` : ""}
     <div class="eyebrow" style="margin-top:28px">Ranked at</div>
     <div style="margin-top:12px">
       ${listings.length ? listings.map(item => `
@@ -2029,6 +2160,24 @@ async function renderUserProfile(handle) {
 
   if (isOwn) {
     document.getElementById("editProfileBtn").onclick = () => renderProfileEditor(profile);
+    const saveCosmeticsBtn = document.getElementById("saveCosmeticsBtn");
+    if (saveCosmeticsBtn) {
+      saveCosmeticsBtn.onclick = async () => {
+        const cosmeticsMsg = document.getElementById("cosmeticsMsg");
+        const newEquipped = {};
+        document.querySelectorAll("[data-equip-slot]").forEach(select => { newEquipped[select.dataset.equipSlot] = select.value || null; });
+        saveCosmeticsBtn.disabled = true;
+        saveCosmeticsBtn.textContent = "Saving...";
+        try {
+          await updateMyCosmetics(newEquipped);
+          renderUserProfile(handle);
+        } catch (error) {
+          cosmeticsMsg.innerHTML = `<div class="msg err">${esc(error.message)}</div>`;
+          saveCosmeticsBtn.disabled = false;
+          saveCosmeticsBtn.textContent = "Save cosmetics";
+        }
+      };
+    }
   }
 }
 

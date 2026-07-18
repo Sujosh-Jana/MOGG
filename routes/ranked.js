@@ -37,6 +37,21 @@ const handleLimiter = createRateLimiter({
 const ADULT_INSTITUTION_TYPES = new Set(['college', 'company']);
 const SCHOOL_BLOCKLIST = /\b(k-?12|school|public school|high school|middle school|primary|secondary|academy)\b/i;
 const SOCIAL_FIELDS = ['instagram', 'tiktok', 'twitter', 'youtube', 'snapchat', 'website'];
+
+// Manually-sold cosmetics: admin grants these after being paid off-platform
+// (no payment processor wired up). Keep this list in sync with the frontend
+// CATALOG constant in ranked.html.
+const COSMETICS_CATALOG = [
+  { id: 'nameplate-gold-shimmer', type: 'nameplate', name: 'Gold Shimmer' },
+  { id: 'nameplate-neon-violet', type: 'nameplate', name: 'Neon Violet' },
+  { id: 'nameplate-midnight-frost', type: 'nameplate', name: 'Midnight Frost' },
+  { id: 'frame-flame', type: 'frame', name: 'Flame Ring' },
+  { id: 'frame-royal', type: 'frame', name: 'Royal Gold' },
+  { id: 'frame-glacier', type: 'frame', name: 'Glacier Ring' },
+  { id: 'badge-verified-gold', type: 'badge', name: 'Gold Star' },
+  { id: 'badge-crown', type: 'badge', name: 'Crown' },
+];
+const COSMETICS_BY_ID = new Map(COSMETICS_CATALOG.map((item) => [item.id, item]));
 const HANDLE_RE = /^[a-z0-9_]{3,20}$/;
 const RESERVED_HANDLES = new Set(['admin', 'ranked', 'moggoff', 'support', 'help', 'api', 'root', 'me', 'null', 'undefined']);
 
@@ -410,6 +425,10 @@ router.get('/users/:handle', async (req, res, next) => {
         bio: userData.bio || '',
         socialLinks: userData.socialLinks || {},
         views: (userData.profileViews || 0) + 1,
+        cosmetics: {
+          owned: userData.cosmetics?.owned || [],
+          equipped: userData.cosmetics?.equipped || {},
+        },
       },
       listings,
     });
@@ -466,6 +485,32 @@ router.patch('/me/banner', authMiddleware, async (req, res, next) => {
     const photoURL = cleanUrl(req.body?.photoURL);
     if (!photoURL) return res.status(400).json({ error: 'photoURL is required.' });
     await db.collection('users').doc(req.user.uid).set({ bannerURL: photoURL, updatedAt: FieldValue.serverTimestamp() }, { merge: true });
+    res.json({ ok: true });
+  } catch (err) {
+    next(err);
+  }
+});
+
+router.patch('/me/cosmetics', authMiddleware, async (req, res, next) => {
+  try {
+    const equippedInput = req.body?.equipped || {};
+    const userRef = db.collection('users').doc(req.user.uid);
+    await db.runTransaction(async (tx) => {
+      const snap = await tx.get(userRef);
+      const owned = new Set((snap.exists && snap.data()?.cosmetics?.owned) || []);
+      const equipped = { ...((snap.exists && snap.data()?.cosmetics?.equipped) || {}) };
+      for (const slot of ['nameplate', 'frame', 'badge']) {
+        if (!Object.prototype.hasOwnProperty.call(equippedInput, slot)) continue;
+        const value = equippedInput[slot];
+        if (!value) { equipped[slot] = null; continue; }
+        const item = COSMETICS_BY_ID.get(value);
+        if (!item || item.type !== slot || !owned.has(value)) {
+          throw Object.assign(new Error(`You don't own that ${slot}.`), { status: 403 });
+        }
+        equipped[slot] = value;
+      }
+      tx.set(userRef, { cosmetics: { equipped } }, { merge: true });
+    });
     res.json({ ok: true });
   } catch (err) {
     next(err);
@@ -935,6 +980,61 @@ router.get('/admin/audit', async (req, res, next) => {
   }
 });
 
+router.get('/admin/cosmetics/catalog', async (req, res, next) => {
+  res.json({ catalog: COSMETICS_CATALOG });
+});
+
+router.post('/admin/cosmetics/grant', async (req, res, next) => {
+  try {
+    const handle = normalizeHandle(req.body?.handle);
+    const cosmeticId = String(req.body?.cosmeticId || '').trim();
+    if (!handle) return res.status(400).json({ error: 'A valid handle is required.' });
+    if (!COSMETICS_BY_ID.has(cosmeticId)) return res.status(400).json({ error: 'Unknown cosmetic id.' });
+
+    const handleSnap = await db.collection('handles').doc(handle).get();
+    if (!handleSnap.exists) return res.status(404).json({ error: 'No account with that handle.' });
+    const uid = handleSnap.data().uid;
+    const userRef = db.collection('users').doc(uid);
+
+    await db.runTransaction(async (tx) => {
+      const userSnap = await tx.get(userRef);
+      const owned = new Set((userSnap.exists && userSnap.data()?.cosmetics?.owned) || []);
+      owned.add(cosmeticId);
+      tx.set(userRef, { cosmetics: { owned: [...owned] } }, { merge: true });
+    });
+    await db.collection('ranked_audit').add(buildAudit('cosmetic_granted', req.user, { handle, cosmeticId }));
+    res.json({ ok: true });
+  } catch (err) {
+    next(err);
+  }
+});
+
+router.post('/admin/cosmetics/revoke', async (req, res, next) => {
+  try {
+    const handle = normalizeHandle(req.body?.handle);
+    const cosmeticId = String(req.body?.cosmeticId || '').trim();
+    if (!handle) return res.status(400).json({ error: 'A valid handle is required.' });
+    const handleSnap = await db.collection('handles').doc(handle).get();
+    if (!handleSnap.exists) return res.status(404).json({ error: 'No account with that handle.' });
+    const uid = handleSnap.data().uid;
+    const userRef = db.collection('users').doc(uid);
+
+    await db.runTransaction(async (tx) => {
+      const userSnap = await tx.get(userRef);
+      const data = userSnap.exists ? userSnap.data() || {} : {};
+      const owned = new Set(data.cosmetics?.owned || []);
+      owned.delete(cosmeticId);
+      const equipped = { ...(data.cosmetics?.equipped || {}) };
+      Object.keys(equipped).forEach((slot) => { if (equipped[slot] === cosmeticId) equipped[slot] = null; });
+      tx.set(userRef, { cosmetics: { owned: [...owned], equipped } }, { merge: true });
+    });
+    await db.collection('ranked_audit').add(buildAudit('cosmetic_revoked', req.user, { handle, cosmeticId }));
+    res.json({ ok: true });
+  } catch (err) {
+    next(err);
+  }
+});
+
 async function ensureRankedUser(user) {
   const ref = db.collection('users').doc(String(user.uid));
   const snap = await ref.get();
@@ -1035,6 +1135,7 @@ async function attachOwnerProfiles(docs) {
       socialLinks: (profile.socialLinks && Object.keys(profile.socialLinks).length) ? profile.socialLinks : (doc.socialLinks || {}),
       displayName: profile.displayName || null,
       ownerHandle: profile.handle || null,
+      cosmetics: profile.cosmetics || { owned: [], equipped: {} },
     };
   });
 }
