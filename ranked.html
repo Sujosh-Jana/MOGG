@@ -1460,12 +1460,19 @@ function renderCandidateList() {
 function candidateRow(candidate, index, myVotes) {
   const rank = index + 1;
   const direction = myVotes[candidate.id];
+  const equipped = candidate.cosmetics?.equipped || {};
+  const frameItem = equipped.frame ? CATALOG_BY_ID.get(equipped.frame) : null;
+  const nameplateItem = equipped.nameplate ? CATALOG_BY_ID.get(equipped.nameplate) : null;
+  const badgeItem = equipped.badge ? CATALOG_BY_ID.get(equipped.badge) : null;
   return `
     <div class="candidate-row ${rank === 1 ? "top" : ""}">
       <div class="rank">${rank}</div>
-      <a class="avatar-link" href="#/candidate/${candidate.id}"><img class="avatar" src="${candidate.photoURL || placeholder(candidate.name)}" alt=""></a>
+      <a class="avatar-link" href="#/candidate/${candidate.id}"><img class="avatar ${frameItem ? frameItem.css : ""}" src="${candidate.photoURL || placeholder(candidate.name)}" alt=""></a>
       <a class="candidate-info-link" href="#/candidate/${candidate.id}">
-        <div class="candidate-name">${esc(candidate.name)}</div>
+        <div class="candidate-name">
+          <span class="${nameplateItem ? nameplateItem.css : ""}">${esc(candidate.name)}</span>
+          ${badgeItem ? `<span class="cosmetic-badge">${badgeItem.icon}</span>` : ""}
+        </div>
         <div class="candidate-meta">
           <span class="score">${candidate.upvotes || 0} upvotes</span>
           - <span class="down">${candidate.downvotes || 0} downvotes</span>
